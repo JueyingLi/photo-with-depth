@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Depth Editor — layered</title>
+<style>
+  :root { --bg:#0a1017; --panel:#131c27; --line:#26323f; --ink:#e9eef5; --mut:#93a3b4; --acc:#4da3ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Inter,system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  .app { display:grid; grid-template-columns: 1fr 320px; gap:16px; padding:16px; height:100vh; }
+  .stagewrap { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:16px; display:flex; flex-direction:column; min-width:0; }
+  .stage { position:relative; flex:1; display:flex; align-items:center; justify-content:center; min-height:0; }
+  canvas { max-width:100%; max-height:100%; border-radius:10px; cursor:crosshair; touch-action:none; }
+  .side { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:16px; overflow-y:auto; }
+  h1 { font-size:1rem; margin:0 0 4px; }
+  h2 { font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); margin:18px 0 8px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:8px 0; font-size:.85rem; }
+  input[type=range]{ width:150px; accent-color:var(--acc); }
+  .readout { font-family:ui-monospace,Menlo,monospace; font-size:.8rem; color:var(--mut); }
+  .readout b { color:var(--ink); }
+  button { background:#1d2836; color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:6px 10px; font-size:.82rem; cursor:pointer; }
+  button:hover { border-color:var(--acc); }
+  button.on { background:var(--acc); border-color:var(--acc); color:#052038; font-weight:600; }
+  .btns { display:flex; flex-wrap:wrap; gap:6px; }
+  .regions { display:flex; flex-direction:column; gap:4px; }
+  .region { display:flex; align-items:center; gap:8px; padding:7px 9px; border:1px solid var(--line); border-radius:8px; cursor:pointer; font-size:.82rem; }
+  .region:hover { border-color:var(--acc); }
+  .region.sel { border-color:var(--acc); background:#17293e; }
+  .region.off { opacity:.5; }
+  .region.hidden-row .name { text-decoration:line-through; opacity:.55; }
+  .swatch { width:12px; height:12px; border-radius:3px; flex:none; }
+  .region .meta { color:var(--mut); font-size:.72rem; }
+  .region .name { flex:1; min-width:0; }
+  .hint { color:var(--mut); font-size:.78rem; line-height:1.4; }
+  .divider { height:1px; background:var(--line); margin:14px 0; }
+  .selpanel { border:1px solid var(--line); border-radius:10px; padding:10px; margin-top:8px; background:#0f1722; }
+  .selpanel.hidden { display:none; }
+  .tag { display:inline-block; font-size:.68rem; padding:1px 6px; border-radius:20px; border:1px solid var(--line); color:var(--mut); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stagewrap">
+    <div class="row" style="margin-top:0">
+      <h1>Depth editor <span class="hint">— layered (LDI) · hover to read depth</span></h1>
+      <div class="readout">x <b id="rx">–</b> y <b id="ry">–</b> · depth <b id="rd">–</b> · layer <b id="rr">–</b></div>
+    </div>
+    <div class="stage"><canvas id="gl"></canvas></div>
+    <div class="hint" style="margin-top:10px">Each layer is the background for the layers in front of it, so moving foreground reveals the layer behind (no ghosting). Move your cursor over the image, or turn on <b>auto-sway</b>.</div>
+  </div>
+
+  <div class="side">
+    <h2>View</h2>
+    <div class="row"><span>Parallax strength</span><input id="strength" type="range" min="0" max="0.06" step="0.001" value="0.022"></div>
+    <div class="row"><span>Auto-sway</span><button id="sway">off</button></div>
+
+    <h2>Layers <span class="hint" id="rcount"></span></h2>
+    <div class="regions" id="regionList"></div>
+
+    <div class="selpanel hidden" id="selPanel">
+      <div class="row" style="margin-top:0"><b id="selName">–</b><span class="tag" id="selMode"></span></div>
+      <div class="readout" id="selStats"></div>
+      <div class="row"><span>Depth offset (re-rank)</span><input id="selOffset" type="range" min="-0.5" max="0.5" step="0.01" value="0"></div>
+      <div class="row"><span class="readout" id="selOffsetVal">0.00</span>
+        <div class="btns"><button id="selBack">◀ back</button><button id="selFront">front ▶</button></div>
+      </div>
+      <div class="row"><span>Ignore in depth (static)</span><button id="selIgnore">off</button></div>
+      <div class="row"><span>Hide layer</span><button id="selHide">off</button></div>
+    </div>
+
+    <div class="divider"></div>
+    <div class="btns"><button id="reset">reset all edits</button></div>
+    <p class="hint" id="status" style="margin-top:12px">loading…</p>
+  </div>
+</div>
+
+<script>
+const OUT = "outputs/";
+const $ = id => document.getElementById(id);
+const clamp = (v,a,b)=>Math.min(b,Math.max(a,v));
+
+let gl, prog, scene, regions=[], regionById={}, layers=[];   // layers: far -> near
+let selected = 0;
+const regionOffset = {}, regionMotion = {}, regionHidden = {};
+let strength = 0.022, sway = false;
+let mouse = {x:0.5, y:0.5, inside:false}, smoothPar = {x:0, y:0};
+
+let W=0, H=0, depthData, labelData;
+
+function loadImage(src){ return new Promise((res,rej)=>{ const i=new Image(); i.crossOrigin="anonymous";
+  i.onload=()=>res(i); i.onerror=rej; i.src=src+"?t="+Date.now(); }); }
+
+async function main(){
+  scene = await (await fetch(OUT+"scene.json?t="+Date.now())).json();
+  W=scene.width; H=scene.height;
+  regions = scene.regions;
+  regions.forEach(r=>{ regionById[r.id]=r; regionOffset[r.id]=0; regionMotion[r.id]=1; });
+
+  // layers ordered far -> near by the sprite index baked in build_sprites
+  layers = [...regions].sort((a,b)=>(a.layer_index??a.depth_mean)-(b.layer_index??b.depth_mean));
+  const n = scene.sprite_count ?? layers.length;
+
+  const spriteImgs = await Promise.all(
+    layers.map((r,i)=>loadImage(OUT+`sprites/sprite_${String(i).padStart(2,"0")}.png`)));
+  const [depthImg, labelImg] = await Promise.all([
+    loadImage(OUT+scene.depth), loadImage(OUT+scene.labelmap)]);
+  depthData = read2D(depthImg); labelData = read2D(labelImg);
+
+  initGL(spriteImgs);
+  buildRegionList();
+  bindUI();
+  $("status").textContent = `${layers.length} layers · ${W}×${H}`;
+  requestAnimationFrame(frame);
+}
+
+function read2D(img){
+  const c=document.createElement("canvas"); c.width=W; c.height=H;
+  const x=c.getContext("2d",{willReadFrequently:true}); x.drawImage(img,0,0,W,H);
+  return x.getImageData(0,0,W,H).data;
+}
+
+/* ---------- WebGL: one textured quad per layer, composited far -> near ---------- */
+const VERT = `attribute vec2 p; varying vec2 uv;
+void main(){ uv=vec2(p.x*0.5+0.5, 0.5-p.y*0.5); gl_Position=vec4(p,0.0,1.0); }`;
+const FRAG = `precision highp float;
+varying vec2 uv;
+uniform sampler2D uSprite; uniform vec2 uDisp; uniform float uTint;
+void main(){
+  vec4 c = texture2D(uSprite, uv - uDisp);   // sprite slides with its own mask
+  if(c.a < 0.004) discard;
+  gl_FragColor = vec4(mix(c.rgb, vec3(0.30,0.64,1.0), uTint), c.a);
+}`;
+let tex=[];
+function initGL(spriteImgs){
+  const cv=$("gl"); cv.width=W; cv.height=H;
+  gl = cv.getContext("webgl", {alpha:false, premultipliedAlpha:false});
+  const vs=sh(gl.VERTEX_SHADER,VERT), fs=sh(gl.FRAGMENT_SHADER,FRAG);
+  prog=gl.createProgram(); gl.attachShader(prog,vs); gl.attachShader(prog,fs); gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog,gl.LINK_STATUS)) throw gl.getProgramInfoLog(prog);
+  gl.useProgram(prog);
+  const buf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 1,-1, -1,1, 1,1]),gl.STATIC_DRAW);
+  const loc=gl.getAttribLocation(prog,"p"); gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  tex = spriteImgs.map(mkTex);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.clearColor(0.075,0.11,0.153,1.0);
+}
+function sh(t,src){ const s=gl.createShader(t); gl.shaderSource(s,src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(s); return s; }
+function mkTex(src){
+  const t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,t);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,src);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+function frame(t){
+  let px, py;
+  if(sway){ px=Math.sin(t*0.0011); py=Math.cos(t*0.0009)*0.5; }
+  else { px=(mouse.x-0.5)*2; py=(mouse.y-0.5)*2; if(!mouse.inside){px=0;py=0;} }
+  smoothPar.x += (px-smoothPar.x)*0.08; smoothPar.y += (py-smoothPar.y)*0.08;
+
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  const uSprite=gl.getUniformLocation(prog,"uSprite");
+  const uDisp=gl.getUniformLocation(prog,"uDisp");
+  const uTint=gl.getUniformLocation(prog,"uTint");
+  gl.uniform1i(uSprite,0);
+  layers.forEach((r,i)=>{                       // far -> near
+    if(regionHidden[r.id]) return;
+    const d = clamp(r.depth_mean + regionOffset[r.id], 0, 1);
+    const m = regionMotion[r.id] ? 1 : 0;
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex[i]);
+    gl.uniform2f(uDisp, d*strength*smoothPar.x*m, d*strength*smoothPar.y*m);
+    gl.uniform1f(uTint, selected===r.id ? 0.20 : 0.0);
+    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  });
+  requestAnimationFrame(frame);
+}
+
+/* ---------- regions UI ---------- */
+function idColor(id){ const h=(id*67)%360; return `hsl(${h} 70% 55%)`; }
+function buildRegionList(){
+  $("rcount").textContent = `(${layers.length}, far→near)`;
+  const L=$("regionList"); L.innerHTML="";
+  [...layers].reverse().forEach(r=>{           // list near -> far (top = front)
+    const el=document.createElement("div"); el.className="region"; el.dataset.id=r.id;
+    el.innerHTML=`<span class="swatch" style="background:${idColor(r.id)}"></span>
+      <span class="name">#${r.id} ${r.label}</span>
+      <span class="meta">${r.depth_mean.toFixed(2)}</span>`;
+    el.onclick=()=>selectRegion(r.id);
+    L.appendChild(el);
+  });
+}
+function selectRegion(id){
+  selected = (selected===id)?0:id;
+  document.querySelectorAll(".region").forEach(e=>e.classList.toggle("sel", +e.dataset.id===selected));
+  refreshSelPanel();
+}
+function refreshSelPanel(){
+  const id=selected, p=$("selPanel");
+  if(!id){ p.classList.add("hidden"); return; }
+  const r=regionById[id]; p.classList.remove("hidden");
+  $("selName").textContent=`#${id} ${r.label}`;
+  $("selMode").textContent=r.source||r.depth_mode||"layer";
+  $("selStats").textContent=`layer depth ${r.depth_mean.toFixed(2)} · ${(r.area_frac*100).toFixed(1)}% of image`;
+  $("selOffset").value=regionOffset[id];
+  $("selOffsetVal").textContent=(regionOffset[id]>=0?"+":"")+regionOffset[id].toFixed(2);
+  $("selIgnore").textContent=regionMotion[id]?"off":"on"; $("selIgnore").classList.toggle("on",!regionMotion[id]);
+  $("selHide").textContent=regionHidden[id]?"on":"off"; $("selHide").classList.toggle("on",!!regionHidden[id]);
+}
+function refreshRegionRow(id){
+  const el=document.querySelector(`.region[data-id="${id}"]`);
+  if(el){ el.classList.toggle("off", !regionMotion[id]); el.classList.toggle("hidden-row", !!regionHidden[id]); }
+}
+
+/* ---------- hover / select ---------- */
+function evtToImg(e){
+  const cv=$("gl"), r=cv.getBoundingClientRect();
+  return { x: clamp(Math.round((e.clientX-r.left)/r.width*W),0,W-1),
+           y: clamp(Math.round((e.clientY-r.top)/r.height*H),0,H-1),
+           u:(e.clientX-r.left)/r.width, v:(e.clientY-r.top)/r.height };
+}
+function hover(e){
+  const p=evtToImg(e); mouse.x=p.u; mouse.y=p.v; mouse.inside=true;
+  const i=(p.y*W+p.x)*4, d=depthData[i]/255, rid=labelData[i];
+  $("rx").textContent=p.x; $("ry").textContent=p.y; $("rd").textContent=d.toFixed(2);
+  $("rr").textContent=rid?`#${rid} ${regionById[rid]?regionById[rid].label:""}`:"–";
+}
+
+/* ---------- bindings ---------- */
+function bindUI(){
+  const cv=$("gl");
+  cv.addEventListener("pointermove",hover);
+  cv.addEventListener("pointerleave",()=>{mouse.inside=false;});
+  cv.addEventListener("pointerdown",e=>{ const p=evtToImg(e); const rid=labelData[(p.y*W+p.x)*4]; if(rid) selectRegion(rid); });
+
+  $("strength").oninput=e=>strength=+e.target.value;
+  $("sway").onclick=e=>{ sway=!sway; e.target.textContent=sway?"on":"off"; e.target.classList.toggle("on",sway); };
+
+  $("selOffset").oninput=e=>{ if(!selected)return; regionOffset[selected]=+e.target.value;
+    $("selOffsetVal").textContent=(regionOffset[selected]>=0?"+":"")+regionOffset[selected].toFixed(2); };
+  $("selFront").onclick=()=>nudge(+0.1);
+  $("selBack").onclick=()=>nudge(-0.1);
+  $("selIgnore").onclick=()=>{ if(!selected)return; regionMotion[selected]=regionMotion[selected]?0:1;
+    refreshRegionRow(selected); refreshSelPanel(); };
+  $("selHide").onclick=()=>{ if(!selected)return; regionHidden[selected]=!regionHidden[selected];
+    refreshRegionRow(selected); refreshSelPanel(); };
+  $("reset").onclick=resetAll;
+}
+function nudge(delta){ if(!selected)return; regionOffset[selected]=clamp(regionOffset[selected]+delta,-0.5,0.5);
+  $("selOffset").value=regionOffset[selected];
+  $("selOffsetVal").textContent=(regionOffset[selected]>=0?"+":"")+regionOffset[selected].toFixed(2); }
+function resetAll(){
+  regions.forEach(r=>{ regionOffset[r.id]=0; regionMotion[r.id]=1; regionHidden[r.id]=false; });
+  document.querySelectorAll(".region").forEach(e=>e.classList.remove("off","hidden-row"));
+  selected=0; selectRegion(0);
+}
+
+main().catch(err=>{ $("status").textContent="Error: "+err+" — serve over http"; console.error(err); });
+</script>
+</body>
+</html>

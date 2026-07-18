@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Layered Depth Preview</title>
+  <style>
+    body { margin:0; font-family:Inter,system-ui,sans-serif; background:#07111f; color:#f5f7fb; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .card { background: rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.12); border-radius: 20px; padding: 20px; }
+    .controls { display:flex; gap:12px; align-items:center; margin-bottom:16px; }
+    input[type="range"] { width: 220px; }
+    .layer-grid { display:grid; gap:12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .layer { background: rgba(0,0,0,0.2); border-radius: 12px; padding: 10px; }
+    img { width:100%; border-radius:10px; display:block; }
+    .label { margin-bottom:8px; font-size:0.95rem; color:#dce6f5; }
+    .animated-stage { position:relative; overflow:hidden; border-radius: 14px; background:#000; min-height: 480px; }
+    .animated-stage img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; opacity:0.95; will-change: transform; }
+    .hint { margin-top: 12px; color:#cdd8eb; font-size:0.95rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h2>Layered depth preview</h2>
+      <p>Foreground layers move faster; background layers move slower. You can change how many layers are shown below.</p>
+      <div class="controls">
+        <label for="layerCount">Layers: <strong id="layerValue">4</strong></label>
+        <input id="layerCount" type="range" min="2" max="8" value="4" />
+      </div>
+      <div class="animated-stage" id="stage"></div>
+      <div class="hint">The foreground moves fastest, while the background moves slowest.</div>
+      <div id="layers" class="layer-grid" style="margin-top:16px"></div>
+    </div>
+  </div>
+  <script>
+    const layerCountInput = document.getElementById('layerCount');
+    const layerValue = document.getElementById('layerValue');
+    const layersContainer = document.getElementById('layers');
+    const stage = document.getElementById('stage');
+    let layerImages = [];
+
+    function renderLayers(count) {
+      layerValue.textContent = count;
+      layersContainer.innerHTML = '';
+      layerImages = [];
+      for (let i = 1; i <= count; i += 1) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'layer';
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.textContent = i === 1 ? 'Foreground' : i === count ? 'Background' : `Layer ${i}`;
+        const img = document.createElement('img');
+        img.src = `outputs/layers/layer_${String(i).padStart(2, '0')}.png`;
+        img.alt = `Layer ${i}`;
+        wrapper.appendChild(label);
+        wrapper.appendChild(img);
+        layersContainer.appendChild(wrapper);
+        layerImages.push(img);
+      }
+      stage.innerHTML = '';
+      layerImages.forEach((img, index) => {
+        const clone = img.cloneNode(true);
+        clone.style.zIndex = String(index + 1);
+        clone.style.transform = 'translate3d(0,0,0)';
+        stage.appendChild(clone);
+      });
+    }
+
+    function animateLayers() {
+      const count = parseInt(layerCountInput.value, 10);
+      const now = performance.now() * 0.001;
+      const stageImages = Array.from(stage.children);
+      stageImages.forEach((img, index) => {
+        const depthRatio = index / Math.max(1, count - 1);
+        const speed = 0.8 + (1 - depthRatio) * 0.6;
+        const offset = Math.sin(now * speed) * (8 + depthRatio * 10);
+        const yOffset = Math.cos(now * speed * 0.7) * (2 + depthRatio * 3);
+        img.style.transform = `translate3d(${offset}px, ${yOffset}px, 0)`;
+      });
+      requestAnimationFrame(animateLayers);
+    }
+
+    layerCountInput.addEventListener('input', (event) => {
+      renderLayers(parseInt(event.target.value, 10));
+    });
+
+    renderLayers(parseInt(layerCountInput.value, 10));
+    animateLayers();
+  </script>
+</body>
+</html>
