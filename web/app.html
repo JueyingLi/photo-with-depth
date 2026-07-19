@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Depth Photo Studio</title>
+<style>
+  :root { --bg:#0a1017; --panel:#131c27; --line:#26323f; --ink:#e9eef5; --mut:#93a3b4; --acc:#4da3ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Inter,system-ui,sans-serif; background:var(--bg); color:var(--ink);
+         min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:20px; padding:28px;
+          width:100%; max-width:560px; }
+  h1 { font-size:1.4rem; margin:0 0 4px; }
+  p.sub { color:var(--mut); margin:0 0 22px; font-size:.9rem; }
+  .drop { border:2px dashed var(--line); border-radius:16px; padding:36px 20px; text-align:center;
+          cursor:pointer; transition:border-color .15s; }
+  .drop:hover, .drop.over { border-color:var(--acc); }
+  .drop b { color:var(--acc); }
+  input[type=file]{ display:none; }
+  button { background:var(--acc); color:#052038; border:none; border-radius:10px; padding:11px 18px;
+           font-size:.95rem; font-weight:600; cursor:pointer; width:100%; margin-top:16px; }
+  button:disabled { opacity:.5; cursor:default; }
+  .prog { margin-top:18px; display:none; }
+  .bar { height:8px; background:#0f1722; border-radius:6px; overflow:hidden; }
+  .bar > i { display:block; height:100%; width:0; background:var(--acc); transition:width .3s; }
+  .prog .msg { color:var(--mut); font-size:.85rem; margin-top:8px; }
+  .cases { margin-top:26px; }
+  .cases h2 { font-size:.75rem; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); }
+  .caseLink { display:inline-block; margin:4px 6px 0 0; padding:6px 12px; border:1px solid var(--line);
+              border-radius:20px; color:var(--ink); text-decoration:none; font-size:.82rem; }
+  .caseLink:hover { border-color:var(--acc); }
+  .thumb { max-width:100%; border-radius:12px; margin-top:14px; display:none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Depth Photo Studio</h1>
+  <p class="sub">上传一张照片,自动分层成会动的立体照片。处理在本机进行。</p>
+
+  <label class="drop" id="drop">
+    点击或拖入照片 · <b>选择图片</b>
+    <input type="file" id="file" accept="image/*">
+  </label>
+  <img class="thumb" id="thumb">
+  <button id="go" disabled>开始分层</button>
+
+  <div class="prog" id="prog">
+    <div class="bar"><i id="barFill"></i></div>
+    <div class="msg" id="progMsg">处理中…</div>
+  </div>
+
+  <div class="cases">
+    <h2>已有案例</h2>
+    <div id="caseList"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let picked = null;
+
+$("drop").addEventListener("dragover", e=>{ e.preventDefault(); $("drop").classList.add("over"); });
+$("drop").addEventListener("dragleave", ()=> $("drop").classList.remove("over"));
+$("drop").addEventListener("drop", e=>{ e.preventDefault(); $("drop").classList.remove("over");
+  if(e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); });
+$("file").addEventListener("change", e=>{ if(e.target.files[0]) setFile(e.target.files[0]); });
+
+function setFile(f){
+  picked = f;
+  $("go").disabled = false;
+  const t = $("thumb"); t.src = URL.createObjectURL(f); t.style.display = "block";
+}
+
+$("go").onclick = async ()=>{
+  if(!picked) return;
+  $("go").disabled = true; $("prog").style.display = "block";
+  const fd = new FormData(); fd.append("file", picked);
+  const { job } = await (await fetch("/api/process", { method:"POST", body:fd })).json();
+  poll(job);
+};
+
+async function poll(job){
+  const s = await (await fetch("/api/status/"+job)).json();
+  const pct = Math.round((s.step||0)/(s.total||5)*100);
+  $("barFill").style.width = pct + "%";
+  $("progMsg").textContent = `${s.msg||""} (${s.step||0}/${s.total||5})`;
+  if(s.status === "done"){ location.href = "/editor?case=" + s.case; return; }
+  if(s.status === "error"){ $("progMsg").textContent = "出错: " + s.msg; $("go").disabled=false; return; }
+  setTimeout(()=>poll(job), 800);
+}
+
+// 已有案例
+fetch("/api/cases").then(r=>r.json()).then(list=>{
+  $("caseList").innerHTML = list.length
+    ? list.map(c=>`<a class="caseLink" href="/editor?case=${c}">${c}</a>`).join("")
+    : '<span style="color:var(--mut);font-size:.82rem">还没有,先上传一张</span>';
+}).catch(()=>{});
+</script>
+</body>
+</html>

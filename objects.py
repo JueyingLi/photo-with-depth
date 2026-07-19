@@ -41,6 +41,27 @@ def run_sam2_masks(image, model_id: str = DEFAULT_MODEL, points_per_batch: int =
     return [masks[i] for i in order], [scores[i] for i in order]
 
 
+def save_segments(masks, path):
+    """把 SAM masks 拍平成一张分割图存盘,供网页「SAM 选物体」用。
+
+    小物体画在上层(大 mask 先画、小 mask 后画覆盖),这样点小物体能选到它。
+    用 RGB 编码 segment id:id = R + G*256(id 0 = 没有物体),支持上千个 mask。
+    """
+    from PIL import Image
+    if not masks:
+        return 0
+    H, W = masks[0].shape
+    seg = np.zeros((H, W), dtype=np.int32)
+    order = sorted(range(len(masks)), key=lambda i: int(masks[i].sum()), reverse=True)  # 大→小
+    for rank, i in enumerate(order, start=1):        # 后画的小 mask 覆盖 → 小物体在上
+        seg[masks[i]] = rank
+    rgb = np.zeros((H, W, 3), dtype=np.uint8)
+    rgb[..., 0] = (seg & 0xFF).astype(np.uint8)
+    rgb[..., 1] = ((seg >> 8) & 0xFF).astype(np.uint8)
+    Image.fromarray(rgb, "RGB").save(path)
+    return len(masks)
+
+
 def _median_depth(depth: np.ndarray, mask: np.ndarray) -> float:
     vals = depth[mask]
     return float(np.median(vals)) if vals.size else 0.0
