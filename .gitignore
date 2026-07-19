@@ -3,8 +3,17 @@ __pycache__/
 *.pyc
 *.pyo
 
+# 虚拟环境(1GB+,绝不入库)
+.venv/
+venv/
+env/
+
 # 生成产物(可由脚本重新生成,不入库)
 outputs/
+
+# 日志 / 临时
+*.log
+.ipynb_checkpoints/
 
 # 系统
 .DS_Store

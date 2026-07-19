@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from build_background import bleed_from_mode
+from build_background import bleed_from_harmonic
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = ROOT / "outputs"
@@ -30,6 +30,8 @@ def build_sprites(image_path, scene_path, labels_path, out_dir, dilate=7):
     lab = np.asarray(Image.open(labels_path).convert("L"))
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    for old in out_dir.glob("sprite_*.png"):   # 清掉上次的旧贴图,避免残留
+        old.unlink()
 
     regions = sorted(scene["regions"], key=lambda r: r["depth_mean"])   # far -> near
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate, dilate))
@@ -42,7 +44,10 @@ def build_sprites(image_path, scene_path, labels_path, out_dir, dilate=7):
 
         rgb = img.copy()
         if nearer.any():
-            filled = bleed_from_mode(img, region_mask)  # nearer holes <- mode of this layer's nearby colour
+            # 从「自己 + 所有更远层」(= 非更近层)平滑填充更近层的洞:
+            # 更近层是被移开的遮挡物,不能当源(否则重影);更远层才是真正在背后、
+            # 能提供真实/更亮内容的。纯 harmonic(locality=0)避免碎片源造成的暗裂缝。
+            filled = bleed_from_harmonic(img, ~nearer, locality_px=0)
             rgb[nearer] = filled[nearer]
 
         cover = region_mask | nearer

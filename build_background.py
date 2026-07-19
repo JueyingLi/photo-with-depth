@@ -103,13 +103,92 @@ def bleed_from_mode(img, source_mask, window=41, levels=6):
     return out
 
 
+def bleed_from_pushpull(img, source_mask):
+    """把 source_mask 的颜色以「近重远轻」的方式铺满其余像素(push-pull 金字塔)。
+
+    Pull:逐级下采样,颜色按权重(是否已知)加权汇聚到粗层。
+    Push:从粗到细双三次上采样,细层已知处保留原色,未知处用上一级(更远/更粗)
+          的估计补——所以近处已知色主导,越远才由越粗的平均接管。平滑、无条纹无面片。
+    """
+    h, w = img.shape[:2]
+    C = img.astype(np.float32) * source_mask[..., None]   # 预乘颜色
+    W = source_mask.astype(np.float32)                    # 权重(1=已知)
+    pyr_C, pyr_W = [C], [W]
+    while min(pyr_C[-1].shape[:2]) > 1:                   # PULL:下采样
+        nh, nw = (pyr_C[-1].shape[0] + 1) // 2, (pyr_C[-1].shape[1] + 1) // 2
+        pyr_C.append(cv2.resize(pyr_C[-1], (nw, nh), interpolation=cv2.INTER_AREA))
+        pyr_W.append(cv2.resize(pyr_W[-1], (nw, nh), interpolation=cv2.INTER_AREA))
+
+    est = pyr_C[-1] / np.maximum(pyr_W[-1], 1e-5)[..., None]
+    for L in range(len(pyr_C) - 2, -1, -1):              # PUSH:上采样融合
+        Wl = np.clip(pyr_W[L], 0, 1)[..., None]
+        col_l = pyr_C[L] / np.maximum(pyr_W[L], 1e-5)[..., None]
+        up = cv2.resize(est, (pyr_W[L].shape[1], pyr_W[L].shape[0]), interpolation=cv2.INTER_CUBIC)
+        est = Wl * col_l + (1 - Wl) * up                 # 已知处保留,未知处用更粗的估计
+    return np.clip(est, 0, 255).astype(np.uint8)
+
+
+def bleed_from_harmonic(img, source_mask, smooth_iters=40, locality_px=60.0):
+    """Laplace/harmonic 填充:内部 = 局部边界色的平滑插值(像肥皂膜)。
+
+    邻居白就更白、邻居黑就更黑,只有离所有边界都很远才慢慢过渡到平均——不会像
+    push-pull 那样塌成一片全局平均。用多重网格(coarse 解当初值 + 每级 Jacobi 精修)
+    加速求解 ∇²u=0。
+
+    locality_px:让局部色保持更久。>0 时按"离边界的距离"把结果往最近边界色拉,
+    距离 < 约 locality_px 的地方更贴局部色,越深越回到平滑 harmonic;越大越局部。
+    """
+    src_img = img
+    img = img.astype(np.float32)
+
+    def solve(im, kn):
+        h, w = kn.shape
+        unknown = ~kn
+        if not unknown.any():
+            return im
+        if min(h, w) <= 4:                                   # 最粗:多迭代几次
+            out = im.copy()
+            for _ in range(400):
+                out[unknown] = cv2.blur(out, (3, 3))[unknown]
+            return out
+        kf = kn.astype(np.float32)
+        ch, cw = (h + 1) // 2, (w + 1) // 2
+        # 粗层已知色 = 只对已知像素加权下采样(避免未知的 0 把颜色拉黑)
+        c_im = cv2.resize(im * kf[..., None], (cw, ch), interpolation=cv2.INTER_AREA)
+        c_den = cv2.resize(kf, (cw, ch), interpolation=cv2.INTER_AREA)
+        c_im /= np.maximum(c_den, 1e-6)[..., None]
+        c_solved = solve(c_im, c_den > 1e-3)                 # 递归解粗层
+        up = cv2.resize(c_solved, (w, h), interpolation=cv2.INTER_LINEAR)
+        out = im.copy()
+        out[unknown] = up[unknown]                           # 粗解当初值
+        for _ in range(smooth_iters):                        # 细层 Jacobi:传播局部边界
+            out[unknown] = cv2.blur(out, (3, 3))[unknown]
+        return out
+
+    kn = source_mask.astype(bool)
+    hm = solve(img, kn)                                   # 平滑 harmonic 解
+    if locality_px > 0:
+        nn = bleed_from(src_img, kn).astype(np.float32)   # 最近边界色(最局部)
+        dist = cv2.distanceTransform((~kn).astype(np.uint8) * 255, cv2.DIST_L2, 3)
+        wl = np.exp(-dist / float(locality_px))[..., None]  # 边界处~1,越深越小
+        hm = wl * nn + (1 - wl) * hm
+        hm[kn] = src_img[kn]                              # 已知处保持原色
+    return np.clip(hm, 0, 255).astype(np.uint8)
+
+
 def _inpaint(img, mask, method, radius):
     """Fill the masked (white) region.
 
-    'bleed' = nearest boundary colour propagated inward (default, faithful),
-    'lama'  = smart AI completion (reconstructs structure, may hallucinate),
-    'telea' = classical fast blur.
+    'pushpull' = 近重远轻的平滑金字塔填充(默认,最顺),
+    'bleed'    = nearest boundary colour(会条纹),
+    'mode'     = 邻域众数(会面片),
+    'lama'     = smart AI completion(会幻想结构),
+    'telea'    = classical fast blur.
     """
+    if method == "pushpull":
+        return bleed_from_pushpull(img, mask == 0)   # 已知=非填充区
+    if method == "mode":
+        return bleed_from_mode(img, mask)
     if method == "bleed":
         return _bleed_fill(img, mask)
     if method == "lama":
@@ -125,7 +204,7 @@ def _inpaint(img, mask, method, radius):
 
 
 def build_background(image_path, scene_path, labels_path, out_path,
-                     fg_thresh=None, method="lama", dilate=9, radius=4):
+                     fg_thresh=None, method="pushpull", dilate=9, radius=4):
     """Inpaint the moving layers out of the image and tag movers in scene.json.
 
     Default: everything moves except the single farthest region, which stays in the
@@ -177,8 +256,8 @@ def main():
     p.add_argument("--out", default=str(OUTPUT_DIR / "background.png"))
     p.add_argument("--fg-thresh", type=float, default=None,
                    help="Keep regions below this depth static (default: only the farthest is static)")
-    p.add_argument("--method", choices=["bleed", "lama", "telea"], default="bleed",
-                   help="bleed = nearest boundary colour inward (default), lama = AI, telea = classical")
+    p.add_argument("--method", choices=["pushpull", "bleed", "mode", "lama", "telea"], default="pushpull",
+                   help="pushpull = 平滑金字塔(默认), bleed/mode = 最近邻/众数, lama = AI, telea = 经典")
     args = p.parse_args()
     n = build_background(args.image, args.scene, args.labels, args.out,
                          fg_thresh=args.fg_thresh, method=args.method)

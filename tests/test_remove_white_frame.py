@@ -1,4 +1,4 @@
-"""裁边(crop_frame.remove_white_frame)的单元测试。
+"""裁边(step_1_crop_frame.remove_white_frame)的单元测试。
 
 用 examples/intro-park-entrance.png 作为样例:一幅有浅色衬纸边框的油画。
 只依赖 cv2/numpy/PIL,不加载深度模型,跑得很快。
@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from crop_frame import remove_white_frame
+from step_1_crop_frame import remove_white_frame
 
 SAMPLE = Path(__file__).resolve().parent.parent / "examples" / "intro-park-entrance.png"
 

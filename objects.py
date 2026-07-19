@@ -11,7 +11,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from regions import _auto_depth_levels, _kmeans_1d, _label_name, _normalize, build_regions, save_scene
+from regions import _auto_depth_levels, _kmeans_1d, _label_name, _normalize, save_scene
+from step_3_build_regions import build_regions
 
 DEFAULT_MODEL = "facebook/sam2.1-hiera-tiny"
 
@@ -43,6 +44,111 @@ def run_sam2_masks(image, model_id: str = DEFAULT_MODEL, points_per_batch: int =
 def _median_depth(depth: np.ndarray, mask: np.ndarray) -> float:
     vals = depth[mask]
     return float(np.median(vals)) if vals.size else 0.0
+
+
+def snap_objects_to_layers(level_map, masks, dominant_frac_thresh=0.9,
+                           min_area_frac=0.002, max_area_frac=0.85):
+    """用 SAM 边界清理层图:某物体 ≥thresh 的像素在同一层,就把整块归到那层。
+
+    输入 level_map(每像素的层号,来自 step_3 的分层)和 SAM masks;对每个物体,
+    统计它在各层的像素占比,若最高占比 ≥ dominant_frac_thresh,就把整块(含少数派)
+    都改成那层号;不到阈值就不动(物体确实跨层,保留逐像素)。
+
+    返回 (新 level_map, 被归整的物体数)。
+    """
+    level_map = np.asarray(level_map)
+    out = level_map.astype(np.int32).copy()
+    h, w = out.shape
+    area = h * w
+    K = int(out.max()) + 1
+
+    objs = [m for m in masks if min_area_frac * area <= int(m.sum()) <= max_area_frac * area]
+    objs.sort(key=lambda m: int(m.sum()))  # 小的先处理,大的后盖(重叠时大物体优先)
+    snapped = 0
+    for m in objs:
+        vals = out[m]
+        if not vals.size:
+            continue
+        counts = np.bincount(vals, minlength=K)
+        dom = int(counts.argmax())
+        if counts[dom] / vals.size >= dominant_frac_thresh:   # ≥90% → 整块归那层
+            out[m] = dom
+            snapped += 1
+    return out, snapped
+
+
+def extract_flat_objects(label_map, depth01, masks, min_area_frac=0.03,
+                         max_depth_range=0.10, contained_ratio=1.5):
+    """大而深度均匀的 SAM 物体,若被并在更大区域里,独立成一块(自成一层)。
+
+    判定"平整整体":
+      - 面积 ≥ min_area_frac(默认 3%)
+      - 深度极差 p95-p5 ≤ max_depth_range(深度变化很少)
+    判定"被包含在其他整体里":
+      - 当前它主要落在某个区域内,而那区域面积 ≥ contained_ratio × 物体面积
+    满足两者 → 把整块赋一个新区域 id 独立出来。
+
+    返回 (新 label_map, 独立出来的物体数)。
+    """
+    depth = _normalize(np.asarray(depth01, np.float32))
+    out = np.asarray(label_map).astype(np.int32).copy()
+    h, w = out.shape
+    area = h * w
+    next_id = int(out.max()) + 1
+    extracted = 0
+
+    for m in sorted(masks, key=lambda m: -int(m.sum())):   # 大的先处理
+        a = int(m.sum())
+        if a < min_area_frac * area:                       # 不够大
+            continue
+        d = depth[m]
+        if d.size == 0:
+            continue
+        if float(np.percentile(d, 95) - np.percentile(d, 5)) > max_depth_range:
+            continue                                       # 深度变化大,不是平整整体
+        vals = out[m]
+        vals = vals[vals > 0]
+        if vals.size == 0:
+            continue
+        dom = int(np.bincount(vals).argmax())              # 它当前主要属于哪个区域
+        dom_area = int((out == dom).sum())
+        if dom_area >= contained_ratio * a:                # 被包在更大的区域里 → 抠出来
+            out[m] = next_id
+            next_id += 1
+            extracted += 1
+    return out, extracted
+
+
+def build_sam_valley_regions(depth01, masks, min_area_frac=0.002, smooth_sigma=2.0,
+                             valley_min_gap=0.05, valley_min_prom=0.06,
+                             dominant_frac_thresh=0.9, extract_area_frac=0.03,
+                             extract_depth_range=0.10, morph=7, merge_same_layer=True):
+    """notebook 的 §3→§4c 流水线(搬进生产):
+
+      valley 分层 → SAM 物体 ≥thresh 归整层 →(同层合并/连通域拆)→ 抠出平整大整体 → 元数据。
+
+    merge_same_layer=True(默认):**同一深度层合成一块**(= 一张 sprite),不按空间连通拆开
+      → 每个深度层一张贴图,最干净。False 则按连通块拆(左右楼各自独立视差)。
+    """
+    from step_3_build_regions import (prepare_depth, valley_levels, assign_by_boundaries,
+                                       split_regions, describe_regions)
+    depth, smooth = prepare_depth(depth01, smooth_sigma)
+    _, boundaries = valley_levels(depth, min_gap=valley_min_gap, min_prom=valley_min_prom)  # §3
+    level_map = assign_by_boundaries(smooth, boundaries)
+    level_map, _ = snap_objects_to_layers(level_map, masks, dominant_frac_thresh, min_area_frac)  # §4b
+
+    if merge_same_layer:                                   # 同层并成一块(不拆连通域)
+        label_map = np.zeros(level_map.shape, np.int32)
+        for new_id, lvl in enumerate(np.unique(level_map), start=1):
+            label_map[level_map == lvl] = new_id
+    else:
+        label_map = split_regions(level_map, min_area_frac=min_area_frac, morph=morph)
+
+    label_map, _ = extract_flat_objects(label_map, depth01, masks,                        # §4c
+                                        min_area_frac=extract_area_frac,
+                                        max_depth_range=extract_depth_range)
+    regions = describe_regions(label_map, depth)
+    return label_map.astype(np.uint8), regions
 
 
 def build_layer_groups(

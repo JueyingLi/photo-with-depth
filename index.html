@@ -37,23 +37,38 @@
   .selpanel { border:1px solid var(--line); border-radius:10px; padding:10px; margin-top:8px; background:#0f1722; }
   .selpanel.hidden { display:none; }
   .tag { display:inline-block; font-size:.68rem; padding:1px 6px; border-radius:20px; border:1px solid var(--line); color:var(--mut); }
+  .topbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  select { background:#1d2836; color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:5px 8px; font-size:.82rem; }
+  .side.collapsed { display:none; }
+  .reopen { position:fixed; top:14px; right:14px; z-index:30; display:none; }
+  .reopen.show { display:block; }
+  /* 窄屏/手机:控制面板变成可收起的浮层,不挡画面 */
+  @media (max-width:820px){
+    .app { grid-template-columns:1fr; height:auto; min-height:100vh; }
+    .side { position:fixed; inset:auto 8px 8px 8px; max-height:60vh; z-index:20;
+            box-shadow:0 10px 40px rgba(0,0,0,.55); }
+  }
 </style>
 </head>
 <body>
 <div class="app">
   <div class="stagewrap">
     <div class="row" style="margin-top:0">
-      <h1>Depth editor <span class="hint">— layered (LDI) · hover to read depth</span></h1>
-      <div class="readout">x <b id="rx">–</b> y <b id="ry">–</b> · depth <b id="rd">–</b> · layer <b id="rr">–</b></div>
+      <div class="topbar">
+        <select id="caseSel"><option value="wall-street">Wall Street</option><option value="park">Oil painting</option></select>
+        <button id="toggleCtrl">controls</button>
+      </div>
+      <div class="readout">depth <b id="rd">–</b> · layer <b id="rr">–</b><b id="rx" hidden></b><b id="ry" hidden></b></div>
     </div>
     <div class="stage"><canvas id="gl"></canvas></div>
-    <div class="hint" style="margin-top:10px">Each layer is the background for the layers in front of it, so moving foreground reveals the layer behind (no ghosting). Move your cursor over the image, or turn on <b>auto-sway</b>.</div>
+    <div class="hint" style="margin-top:10px">拖动/移动光标或开 <b>Phone tilt</b> 看视差。手机上点 <b>controls</b> 收起面板。</div>
   </div>
 
-  <div class="side">
-    <h2>View</h2>
+  <div class="side" id="side">
+    <div class="row" style="margin-top:0"><h2 style="margin:0">Controls</h2><button id="minBtn">▾ 收起</button></div>
     <div class="row"><span>Parallax strength</span><input id="strength" type="range" min="0" max="0.06" step="0.001" value="0.022"></div>
     <div class="row"><span>Auto-sway</span><button id="sway">off</button></div>
+    <div class="row"><span>Phone tilt <span class="hint">(陀螺仪)</span></span><button id="tilt">off</button></div>
 
     <h2>Layers <span class="hint" id="rcount"></span></h2>
     <div class="regions" id="regionList"></div>
@@ -73,18 +88,43 @@
     <div class="btns"><button id="reset">reset all edits</button></div>
     <p class="hint" id="status" style="margin-top:12px">loading…</p>
   </div>
+  <button class="reopen" id="reopenBtn">☰ controls</button>
 </div>
 
 <script>
-const OUT = "outputs/";
 const $ = id => document.getElementById(id);
 const clamp = (v,a,b)=>Math.min(b,Math.max(a,v));
+
+// 案例切换:?case=wall-street|park,各自一个文件夹
+const CASES = { "wall-street": "outputs/cases/wall-street/", "park": "outputs/cases/park/" };
+const CASE = new URLSearchParams(location.search).get("case") || "wall-street";
+const OUT = CASES[CASE] || CASES["wall-street"];
 
 let gl, prog, scene, regions=[], regionById={}, layers=[];   // layers: far -> near
 let selected = 0;
 const regionOffset = {}, regionMotion = {}, regionHidden = {};
 let strength = 0.022, sway = false;
 let mouse = {x:0.5, y:0.5, inside:false}, smoothPar = {x:0, y:0};
+let tilt = {x:0, y:0, on:false, ref:null};   // 手机陀螺仪驱动的视差
+
+// 手机方向:gamma=左右倾斜, beta=前后倾斜。以第一次读数为中位。
+// 随屏幕旋转(横/竖)重映射到画面 x/y,横过来也能对。
+function screenAngle(){ return (screen.orientation && screen.orientation.angle) || window.orientation || 0; }
+const AMP_ROLL  = 22;     // 左右(roll)满幅所需角度:越小幅度越大
+const AMP_PITCH = 35;     // 上下(pitch)满幅所需角度
+const PITCH_DRIFT = 0.02; // 上下中位跟随当前角度的速度 → 慢慢回正
+function onOrient(ev){
+  const gm = ev.gamma||0, bt = ev.beta||0;
+  if(tilt.ref===null) tilt.ref = {g: gm, b: bt};
+  tilt.ref.b += (bt - tilt.ref.b) * PITCH_DRIFT;        // 上下:自适应中位,任何持机角度都慢慢回正
+  const g = clamp((gm - tilt.ref.g) / AMP_ROLL,  -1, 1); // 左右(roll):固定中位,幅度大
+  const b = clamp((bt - tilt.ref.b) / AMP_PITCH, -1, 1); // 上下(pitch):半幅
+  const a = screenAngle();                                // 按屏幕旋转把"物理上下/左右"映射到画面 x/y
+  if(a===90){ tilt.x=b; tilt.y=-g; }
+  else if(a===270 || a===-90){ tilt.x=-b; tilt.y=g; }
+  else if(a===180){ tilt.x=-g; tilt.y=-b; }
+  else { tilt.x=g; tilt.y=b; }
+}
 
 let W=0, H=0, depthData, labelData;
 
@@ -162,7 +202,8 @@ function mkTex(src){
 
 function frame(t){
   let px, py;
-  if(sway){ px=Math.sin(t*0.0011); py=Math.cos(t*0.0009)*0.5; }
+  if(tilt.on){ px=tilt.x; py=tilt.y; }                              // 手机倾斜优先
+  else if(sway){ px=Math.sin(t*0.0011); py=Math.cos(t*0.0009)*0.5; }
   else { px=(mouse.x-0.5)*2; py=(mouse.y-0.5)*2; if(!mouse.inside){px=0;py=0;} }
   smoothPar.x += (px-smoothPar.x)*0.08; smoothPar.y += (py-smoothPar.y)*0.08;
 
@@ -233,6 +274,12 @@ function hover(e){
   $("rr").textContent=rid?`#${rid} ${regionById[rid]?regionById[rid].label:""}`:"–";
 }
 
+/* ---------- 面板收起 / 案例切换 ---------- */
+function setPanel(open){
+  $("side").classList.toggle("collapsed", !open);
+  $("reopenBtn").classList.toggle("show", !open);
+}
+
 /* ---------- bindings ---------- */
 function bindUI(){
   const cv=$("gl");
@@ -240,8 +287,30 @@ function bindUI(){
   cv.addEventListener("pointerleave",()=>{mouse.inside=false;});
   cv.addEventListener("pointerdown",e=>{ const p=evtToImg(e); const rid=labelData[(p.y*W+p.x)*4]; if(rid) selectRegion(rid); });
 
+  // 案例切换(改 URL 参数重载,状态干净)
+  $("caseSel").value = CASE;
+  $("caseSel").onchange = e => { location.search = "?case=" + e.target.value; };
+  // 面板收起/展开
+  $("minBtn").onclick = ()=>setPanel(false);
+  $("toggleCtrl").onclick = ()=>setPanel($("side").classList.contains("collapsed"));
+  $("reopenBtn").onclick = ()=>setPanel(true);
+  if(window.innerWidth < 820) setPanel(false);   // 手机默认收起,不挡画面
+  // 屏幕旋转后重置陀螺仪中位
+  window.addEventListener("orientationchange", ()=>{ tilt.ref=null; });
+
   $("strength").oninput=e=>strength=+e.target.value;
   $("sway").onclick=e=>{ sway=!sway; e.target.textContent=sway?"on":"off"; e.target.classList.toggle("on",sway); };
+  $("tilt").onclick=async e=>{
+    if(tilt.on){ tilt.on=false; window.removeEventListener("deviceorientation",onOrient);
+      e.target.textContent="off"; e.target.classList.remove("on"); return; }
+    try{                                            // iOS 13+ 需要用户手势里申请权限
+      if(typeof DeviceOrientationEvent!=="undefined" && DeviceOrientationEvent.requestPermission){
+        if(await DeviceOrientationEvent.requestPermission()!=="granted"){ alert("需要允许「动作与方向」权限"); return; }
+      }
+    }catch(err){ alert("陀螺仪不可用: "+err); return; }
+    tilt.ref=null; tilt.on=true; window.addEventListener("deviceorientation",onOrient);
+    e.target.textContent="on"; e.target.classList.add("on");
+  };
 
   $("selOffset").oninput=e=>{ if(!selected)return; regionOffset[selected]=+e.target.value;
     $("selOffsetVal").textContent=(regionOffset[selected]>=0?"+":"")+regionOffset[selected].toFixed(2); };

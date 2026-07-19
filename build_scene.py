@@ -14,7 +14,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from regions import build_regions, save_scene
+from step_3_build_regions import build_regions
+from regions import save_scene
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = ROOT / "outputs"

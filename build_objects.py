@@ -17,7 +17,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from objects import DEFAULT_MODEL, build_hybrid_regions, build_layer_groups, run_sam2_masks
+from objects import (DEFAULT_MODEL, build_hybrid_regions, build_layer_groups,
+                     build_sam_valley_regions, run_sam2_masks)
 from regions import save_scene
 
 ROOT = Path(__file__).resolve().parent
@@ -37,9 +38,15 @@ def parse_args():
     p.add_argument("--contain", type=float, default=0.75, help="Overlap fraction to merge a part into an object")
     p.add_argument("--depth-merge", type=float, default=0.12, help="Max depth gap to merge parts")
     p.add_argument("--per-object", action="store_true",
-                   help="Keep one region per object (many) instead of merging into layer groups")
+                   help="每个物体一个区域(build_hybrid_regions)")
+    p.add_argument("--layer-groups", action="store_true",
+                   help="旧的层组模式(build_layer_groups)")
     p.add_argument("--groups", type=int, default=None,
-                   help="Number of depth-layer groups to merge into (default: auto)")
+                   help="layer-groups 模式:合并成几层(默认自动)")
+    p.add_argument("--dominant-frac", type=float, default=0.9,
+                   help="默认模式:物体 ≥ 这个比例在同一层就整块归层")
+    p.add_argument("--extract-area", type=float, default=0.03,
+                   help="默认模式:面积 ≥ 这个比例且深度均匀的整体独立成层")
     return p.parse_args()
 
 
@@ -70,12 +77,18 @@ def main():
         )
         n_obj = sum(1 for r in regions if r["source"] == "object")
         print(f"Fused into {len(regions)} regions: {n_obj} objects + {len(regions)-n_obj} depth-background")
-    else:
+    elif args.layer_groups:
         label_map, regions, centers = build_layer_groups(
             depth, masks, n_groups=args.groups,
             min_area_frac=args.min_area, max_area_frac=args.max_area,
         )
         print(f"Merged into {len(regions)} depth-layer groups (objects snapped to their dominant layer)")
+    else:  # 默认:notebook 的 valley + SAM snap(90%) + extract(平整整体)
+        label_map, regions = build_sam_valley_regions(
+            depth, masks, min_area_frac=args.min_area,
+            dominant_frac_thresh=args.dominant_frac, extract_area_frac=args.extract_area,
+        )
+        print(f"valley+SAM: {len(regions)} 区域 (snap≥{args.dominant_frac}, extract大整体≥{args.extract_area})")
     save_scene(label_map, regions, OUTPUT_DIR)
     from build_background import build_background
     n_mov = build_background(args.image, OUTPUT_DIR / "scene.json",
