@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
@@ -78,6 +78,33 @@ async def api_rebake(case: str = Form(...), file: UploadFile = File(...)):
     build_sprites(cdir / "cropped_input.png", cdir / "scene.json",
                   cdir / "region_labels.png", cdir / "sprites")
     return {"ok": True, "regions": len(regions)}
+
+
+@app.get("/api/export/{case}")
+def api_export(case: str):
+    """把一个案例打包成单文件自包含 HTML(贴图 base64 内嵌 + 观看器),供下载/分享。"""
+    import base64
+    import json
+
+    cdir = CASES / case
+    scene_path = cdir / "scene.json"
+    if not scene_path.exists():
+        return JSONResponse({"error": "unknown case"}, status_code=404)
+    scene = json.loads(scene_path.read_text())
+    layers = sorted(scene["regions"], key=lambda r: r.get("layer_index", r["depth_mean"]))  # far→near
+    n = scene.get("sprite_count", len(layers))
+    uris = []
+    for i in range(n):
+        p = cdir / "sprites" / f"sprite_{i:02d}.png"
+        uris.append("data:image/png;base64," + base64.b64encode(p.read_bytes()).decode())
+    scene_obj = {"width": scene["width"], "height": scene["height"],
+                 "layers": [{"id": l["id"], "depth_mean": l["depth_mean"]} for l in layers[:n]]}
+    html = (ROOT / "viewer_template.html").read_text()
+    html = html.replace("__TITLE__", f"Depth Photo — {case}")
+    html = html.replace('/*__SCENE__*/ {"width":1,"height":1,"layers":[]}', "/*scene*/ " + json.dumps(scene_obj))
+    html = html.replace("/*__SPRITES__*/ []", "/*sprites*/ " + json.dumps(uris))
+    return Response(html, media_type="text/html",
+                    headers={"Content-Disposition": f'attachment; filename="depth-{case}.html"'})
 
 
 @app.get("/api/cases")

@@ -134,8 +134,21 @@
     <button id="rebakeBtn" class="primary" style="width:100%; margin-top:8px">✓ 应用抠图 · 重新生成分层</button>
     <div class="btns" style="margin-top:6px"><button id="undoBtn">撤销涂抹</button></div>
 
+    <h2>Sparkles <span class="hint">动态光点(嵌进各层深度·会被遮挡)</span></h2>
+    <div class="row" style="margin-top:0"><span>开启</span><button id="spkOn">off</button></div>
+    <div class="row"><span>样式</span>
+      <div class="btns"><button id="spkStars" class="on">闪烁星</button><button id="spkDust">浮尘</button><button id="spkBokeh">光斑</button><button id="spkSnow">雪</button><button id="spkLeaves">碎叶</button></div></div>
+    <div class="row"><span>数量 <span class="readout" id="spkCountVal">400</span></span><input id="spkCount" type="range" min="50" max="2000" step="50" value="400"></div>
+    <div class="row"><span>速度 <span class="readout" id="spkSpeedVal">1.0</span></span><input id="spkSpeed" type="range" min="0" max="4" step="0.1" value="1"></div>
+    <div class="row"><span>方向角 <span class="readout" id="spkAngleVal">90°</span></span><input id="spkAngle" type="range" min="0" max="360" step="5" value="90"></div>
+    <div class="row"><span>扩散锥 <span class="readout" id="spkSpreadVal">30°</span></span><input id="spkSpread" type="range" min="0" max="360" step="5" value="30"></div>
+    <div class="row"><span>亮度 前↔后 <span class="readout" id="spkBrightVal">0.0</span></span><input id="spkBright" type="range" min="-1" max="1" step="0.1" value="0"></div>
+    <div class="row"><span>范围 <span class="readout" id="spkRangeVal">100%</span></span><input id="spkRange" type="range" min="5" max="100" step="5" value="100"></div>
+    <div class="hint">方向角 0°→ · 90°↓ · 180°← · 270°↑;范围=以画面中心为初始点的半径,越小越像从一点喷出</div>
+
     <div class="divider"></div>
-    <div class="btns"><button id="reset">reset all edits</button></div>
+    <div class="btns"><button id="exportBtn" class="primary" style="width:100%">导出可分享 HTML</button></div>
+    <div class="btns" style="margin-top:6px"><button id="reset">reset all edits</button></div>
     <p class="hint" id="status" style="margin-top:12px">loading…</p>
   </div>
   <button class="reopen" id="reopenBtn">☰ controls</button>
@@ -188,8 +201,8 @@ function fitStage(){                            // 按舞台大小把图片等�
 // 手机方向:gamma=左右倾斜, beta=前后倾斜。以第一次读数为中位。
 // 随屏幕旋转(横/竖)重映射到画面 x/y,横过来也能对。
 function screenAngle(){ return (screen.orientation && screen.orientation.angle) || window.orientation || 0; }
-const AMP_ROLL  = 28;     // 左右(roll)满幅所需角度(×2:配合 gain×2,范围翻倍而每度速度不变)
-const AMP_PITCH = 44;     // 上下(pitch)满幅所需角度(比左右钝一点)
+const AMP_ROLL  = 28;     // 左右(roll)满幅所需角度
+const AMP_PITCH = 28;     // 上下(pitch)满幅所需角度(与左右一致)
 const DRIFT = 0.004;      // 两轴中位都慢慢跟随当前角度 → 到极限后慢慢回中,给后续留余地(越小回得越慢)
 // 手感:很灵敏(小倾斜就到满幅)→ clamp 到 ±1 就是极限、拖不动了 → 保持会慢慢回中。
 function onOrient(ev){
@@ -235,6 +248,7 @@ async function main(){
   initCutout();
 
   initGL(spriteImgs);
+  initSparkles();
   buildRegionList();
   bindUI();
   fitStage();                                   // 等比缩放到舞台大小
@@ -260,7 +274,7 @@ void main(){
   if(c.a < 0.004) discard;
   gl_FragColor = vec4(mix(c.rgb, vec3(0.30,0.64,1.0), uTint), c.a);
 }`;
-let tex=[];
+let tex=[], quadBuf, pLoc;
 function initGL(spriteImgs){
   const cv=$("gl"); cv.width=W; cv.height=H;
   gl = cv.getContext("webgl", {alpha:false, premultipliedAlpha:false});
@@ -268,15 +282,137 @@ function initGL(spriteImgs){
   prog=gl.createProgram(); gl.attachShader(prog,vs); gl.attachShader(prog,fs); gl.linkProgram(prog);
   if(!gl.getProgramParameter(prog,gl.LINK_STATUS)) throw gl.getProgramInfoLog(prog);
   gl.useProgram(prog);
-  const buf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  quadBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,quadBuf);
   gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 1,-1, -1,1, 1,1]),gl.STATIC_DRAW);
-  const loc=gl.getAttribLocation(prog,"p"); gl.enableVertexAttribArray(loc);
-  gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  pLoc=gl.getAttribLocation(prog,"p"); gl.enableVertexAttribArray(pLoc);
+  gl.vertexAttribPointer(pLoc,2,gl.FLOAT,false,0,0);
   tex = spriteImgs.map(mkTex);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   gl.clearColor(0.075,0.11,0.153,1.0);
 }
+
+/* ---------- Sparkles:按深度分层的加性发光粒子 ---------- */
+// angle: 度(0=→,90=↓,180=←,270=↑);spread: 锥形扩散角;radius: 发射范围(以初始点为中心);bright: 前后亮度
+const spk = { on:false, style:"stars", count:400, speed:1.0, angle:90, spread:30, bright:0, radius:1.0, ox:0.5, oy:0.5 };
+const SPK_STYLES = {   // size/闪烁/颜色/叶片/寿命/位移距离/左右摆/翻滚 + 该样式的默认方向锥与范围
+  stars:  { sizeMin:3, sizeMax:9,  tw:7.0, color:[1,1,1],        leaf:0, life:6, travel:0.05, sway:0,    tumble:0,   angle:90,  spread:360, radius:1.0 },
+  dust:   { sizeMin:2, sizeMax:6,  tw:2.0, color:[1,0.9,0.7],    leaf:0, life:8, travel:0.25, sway:0,    tumble:0,   angle:90,  spread:360, radius:1.0 },
+  bokeh:  { sizeMin:12,sizeMax:26, tw:1.3, color:[1,0.85,0.5],   leaf:0, life:9, travel:0.45, sway:0,    tumble:0,   angle:270, spread:40,  radius:1.0 },
+  snow:   { sizeMin:4, sizeMax:10, tw:0.8, color:[0.9,0.95,1.0], leaf:0, life:7, travel:1.0,  sway:0.01, tumble:0,   angle:90,  spread:25,  radius:1.0 },
+  leaves: { sizeMin:10,sizeMax:20, tw:0.5, color:[0.66,0.5,0.22],leaf:1, life:8, travel:1.0,  sway:0.03, tumble:2.5, angle:90,  spread:55,  radius:1.0 },
+};
+const SPK_VERT = `attribute vec4 aSeed; attribute vec3 aData;
+uniform float uTime,uSpeed,uLife,uTravel,uRadius,uAngle,uSpread,uBright,uSway,uTumble,uTw,uPivot,uMaxD,uGamma,uSizeScale,uDMin,uDSpan;
+uniform vec2 uPar,uOrigin;
+varying float vA; varying float vRot;
+void main(){
+  float t01 = fract(uTime*uSpeed/uLife + aSeed.w);          // 归一化年龄(相位错开)
+  vec2 spawn = uOrigin + aSeed.xy*uRadius;                  // 初始点(圆盘内,范围=uRadius)
+  float ang = radians(uAngle) + aSeed.z*radians(uSpread);   // 锥形方向:基准角 ± 扩散
+  vec2 p = spawn + vec2(cos(ang),sin(ang))*(t01*uTravel);   // 沿角度飞出
+  p.x += sin(uTime*1.6 + aSeed.w*6.28)*uSway;               // 叶片左右摆
+  p = fract(p);
+  float d=aData.x, dist=uPivot-d;
+  float f=sign(dist)*pow(abs(dist)/uMaxD,uGamma)*uMaxD;      // 和该深度的层同样的视差
+  p += f*uPar;
+  gl_Position=vec4(p.x*2.0-1.0, 1.0-p.y*2.0, 0.0,1.0);
+  float near01=clamp((d-uDMin)/max(uDSpan,1e-3),0.0,1.0);         // 0=最远 1=最近
+  gl_PointSize=aData.y*uSizeScale*mix(0.5,1.5,near01);            // 近大远小
+  float fade=smoothstep(0.0,0.12,t01)*smoothstep(1.0,0.85,t01);   // 生死淡入淡出
+  float tw=0.55+0.45*sin(uTime*uTw + aSeed.w*6.28);              // 明灭
+  float nd=clamp(abs(uPivot-d)/max(uMaxD,1e-3),0.0,1.0);         // 0=近 1=远
+  float br=1.0 + uBright*(0.5-nd);                               // uBright>0 前亮后暗;<0 前暗后亮
+  vA=clamp(fade*tw*max(br,0.0),0.0,2.0);
+  vRot=aData.z + uTime*uTumble;
+}`;
+const SPK_FRAG = `precision highp float; varying float vA; varying float vRot;
+uniform vec3 uColor; uniform float uLeaf;
+void main(){
+  vec2 c=gl_PointCoord-0.5; float a;
+  if(uLeaf>0.5){                                        // 叶片:旋转的细长形,常规透明
+    float s=sin(vRot),co=cos(vRot); vec2 r=vec2(c.x*co-c.y*s, c.x*s+c.y*co);
+    a=1.0-smoothstep(0.16,0.42,length(vec2(r.x*2.4,r.y)));
+    gl_FragColor=vec4(uColor, a*vA);
+  } else {                                              // 光点:柔和圆,加性发光
+    a=smoothstep(0.5,0.0,length(c)); a*=a;
+    gl_FragColor=vec4(uColor*vA, a*vA);
+  }
+}`;
+let sprog, sbuf, sCount=0, sLoc={}, sU={}, spkRanges=null;   // spkRanges[li]={start,count} 每层的粒子区段
+function initSparkles(){
+  const p=gl.createProgram();
+  gl.attachShader(p,sh(gl.VERTEX_SHADER,SPK_VERT)); gl.attachShader(p,sh(gl.FRAGMENT_SHADER,SPK_FRAG));
+  gl.linkProgram(p); if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw gl.getProgramInfoLog(p);
+  sprog=p; sbuf=gl.createBuffer();
+  sLoc={ aSeed:gl.getAttribLocation(p,"aSeed"), aData:gl.getAttribLocation(p,"aData") };
+  ["uTime","uSpeed","uLife","uTravel","uRadius","uAngle","uSpread","uBright","uSway","uTumble","uTw",
+   "uPivot","uMaxD","uGamma","uSizeScale","uDMin","uDSpan","uPar","uOrigin","uColor","uLeaf"].forEach(k=>sU[k]=gl.getUniformLocation(p,k));
+  buildSparkles();
+}
+function buildSparkles(){                       // 每个粒子随机绑定一层,按层分组连续存放 → 可逐层绘制做遮挡
+  const st=SPK_STYLES[spk.style], N=spk.count, nL=Math.max(1,layers.length);
+  const li=new Int32Array(N); for(let k=0;k<N;k++) li[k]=(Math.random()*nL)|0;
+  spkRanges=layers.map(()=>({start:0,count:0}));
+  if(!layers.length) spkRanges=[{start:0,count:N}];
+  for(let k=0;k<N;k++) spkRanges[li[k]].count++;
+  let acc=0; for(const r of spkRanges){ r.start=acc; acc+=r.count; }
+  const cur=spkRanges.map(r=>r.start), a=new Float32Array(N*7);
+  for(let k=0;k<N;k++){ const L=li[k], o=cur[L]++*7;
+    const rr=Math.sqrt(Math.random()), th=Math.random()*6.283;    // 均匀圆盘
+    a[o]=rr*Math.cos(th); a[o+1]=rr*Math.sin(th);
+    a[o+2]=Math.random()-0.5;                                     // 锥形随机
+    a[o+3]=Math.random();                                         // phase
+    a[o+4]= layers.length ? layers[L].depth_mean : 0.5;
+    a[o+5]= st.sizeMin + Math.random()*(st.sizeMax-st.sizeMin);
+    a[o+6]= Math.random()*6.283;                                  // rot0
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER,sbuf); gl.bufferData(gl.ARRAY_BUFFER,a,gl.STATIC_DRAW); sCount=N;
+}
+function drawSparkleLayer(li, gain, maxD){      // 画属于第 li 层的粒子(紧跟该层 sprite 之后,被更近的 sprite 遮挡)
+  if(!spk.on || !spkRanges || !spkRanges[li] || !spkRanges[li].count) return;
+  const st=SPK_STYLES[spk.style];
+  gl.useProgram(sprog);
+  gl.blendFunc(gl.SRC_ALPHA, st.leaf ? gl.ONE_MINUS_SRC_ALPHA : gl.ONE);   // 叶=常规透明;光点=加性
+  gl.bindBuffer(gl.ARRAY_BUFFER,sbuf);
+  gl.enableVertexAttribArray(sLoc.aSeed); gl.vertexAttribPointer(sLoc.aSeed,4,gl.FLOAT,false,28,0);
+  gl.enableVertexAttribArray(sLoc.aData); gl.vertexAttribPointer(sLoc.aData,3,gl.FLOAT,false,28,16);
+  gl.uniform1f(sU.uTime, performance.now()/1000);
+  gl.uniform1f(sU.uSpeed, spk.speed); gl.uniform1f(sU.uLife, st.life); gl.uniform1f(sU.uTravel, st.travel);
+  gl.uniform1f(sU.uRadius, spk.radius); gl.uniform2f(sU.uOrigin, spk.ox, spk.oy);
+  gl.uniform1f(sU.uAngle, spk.angle); gl.uniform1f(sU.uSpread, spk.spread); gl.uniform1f(sU.uBright, spk.bright);
+  gl.uniform1f(sU.uSway, st.sway); gl.uniform1f(sU.uTumble, st.tumble); gl.uniform1f(sU.uTw, st.tw);
+  gl.uniform2f(sU.uPar, strength*gain*smoothPar.x, strength*gain*smoothPar.y);
+  gl.uniform1f(sU.uPivot, pivotDepth); gl.uniform1f(sU.uMaxD, maxD); gl.uniform1f(sU.uGamma, 2.0);
+  gl.uniform1f(sU.uSizeScale, $("gl").width/1024);
+  let dmin=1e9,dmax=-1e9; for(const l of layers){ if(l.depth_mean<dmin)dmin=l.depth_mean; if(l.depth_mean>dmax)dmax=l.depth_mean; }
+  gl.uniform1f(sU.uDMin, dmin); gl.uniform1f(sU.uDSpan, dmax-dmin);
+  gl.uniform3f(sU.uColor, st.color[0], st.color[1], st.color[2]); gl.uniform1f(sU.uLeaf, st.leaf?1:0);
+  gl.drawArrays(gl.POINTS, spkRanges[li].start, spkRanges[li].count);
+}
+/* 调 sparkles 时画辅助线:初始点 + 范围圈 + 方向箭头 + 扩散锥,画在 #edit 叠层上,过一会自动清 */
+let spkGuideTimer=null;
+function gline(g,x0,y0,x1,y1){ g.beginPath(); g.moveTo(x0,y0); g.lineTo(x1,y1); g.stroke(); }
+function drawSparkleGuide(){
+  if(!editCtx || cutoutMode!=="off" || curveActive) return;     // 抠图/曲线模式不抢叠层
+  const g=editCtx; g.clearRect(0,0,W,H);
+  const ox=spk.ox*W, oy=spk.oy*H, rx=spk.radius*W, ry=spk.radius*H;
+  const lw=Math.max(2, W/480), dash=W/70;
+  g.strokeStyle="rgba(77,163,255,0.9)"; g.lineWidth=lw;           // 范围圈
+  g.setLineDash([dash,dash]); g.beginPath(); g.ellipse(ox,oy,rx,ry,0,0,Math.PI*2); g.stroke(); g.setLineDash([]);
+  g.fillStyle="rgba(77,163,255,1)"; g.beginPath(); g.arc(ox,oy,Math.max(4,W/170),0,Math.PI*2); g.fill();  // 初始点
+  const a=spk.angle*Math.PI/180, half=Math.min(spk.spread,359)*Math.PI/360, len=Math.max(rx,ry,W*0.30);
+  g.strokeStyle="rgba(255,214,80,0.95)"; g.lineWidth=lw;          // 方向箭头
+  const ex=ox+Math.cos(a)*len, ey=oy+Math.sin(a)*len; gline(g,ox,oy,ex,ey);
+  const ah=W/60; gline(g,ex,ey, ex-Math.cos(a-0.4)*ah, ey-Math.sin(a-0.4)*ah);
+  gline(g,ex,ey, ex-Math.cos(a+0.4)*ah, ey-Math.sin(a+0.4)*ah);
+  g.strokeStyle="rgba(255,214,80,0.5)";                          // 扩散锥两边 + 弧
+  gline(g,ox,oy, ox+Math.cos(a-half)*len, oy+Math.sin(a-half)*len);
+  gline(g,ox,oy, ox+Math.cos(a+half)*len, oy+Math.sin(a+half)*len);
+  g.beginPath(); g.arc(ox,oy,len,a-half,a+half); g.stroke();
+}
+function showSparkleGuide(){ drawSparkleGuide(); clearTimeout(spkGuideTimer);
+  spkGuideTimer=setTimeout(()=>{ if(editCtx && cutoutMode==="off" && !curveActive) editCtx.clearRect(0,0,W,H); }, 1600); }
 function sh(t,src){ const s=gl.createShader(t); gl.shaderSource(s,src); gl.compileShader(s);
   if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(s); return s; }
 function mkTex(src){
@@ -316,27 +452,33 @@ function frame(t){
   }
 
   gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(prog);                          // 恢复层的顶点状态(粒子会切换 program/buffer)
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.enableVertexAttribArray(pLoc); gl.vertexAttribPointer(pLoc,2,gl.FLOAT,false,0,0);
   const uSprite=gl.getUniformLocation(prog,"uSprite");
   const uDisp=gl.getUniformLocation(prog,"uDisp");
   const uTint=gl.getUniformLocation(prog,"uTint");
   gl.uniform1i(uSprite,0);
+  const gain = tilt.on ? 4 : 1;                 // 陀螺仪最大行程(×2:配合 AMP×2,范围翻倍速度不变)
   let maxPivotDist=0;                           // 各层到锚点的最大深度距离,用来把曲线归一化
   for(const r of layers) maxPivotDist=Math.max(maxPivotDist, Math.abs(pivotDepth - r.depth_mean));
   maxPivotDist = maxPivotDist || 1;
   const GAMMA = 2.0;                            // 越大:靠锚点的层位移越小,越往后相对位移越大
   layers.forEach((r,i)=>{                       // far -> near
     if(regionHidden[r.id]) return;
+    gl.useProgram(prog);                        // 恢复层渲染状态(上一层的粒子改了 program/buffer/blend)
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf); gl.vertexAttribPointer(pLoc,2,gl.FLOAT,false,0,0);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     const d = clamp(r.depth_mean + regionOffset[r.id], 0, 1);
     // 锚点层不动;离它越远动得越多,且用幂曲线(前面层之间小、越往后越大)。鼠标&陀螺仪共用锚点
     const dist = pivotDepth - d;
     const factor = Math.sign(dist) * Math.pow(Math.abs(dist)/maxPivotDist, GAMMA) * maxPivotDist;
-    const gain = tilt.on ? 4 : 1;                 // 陀螺仪最大行程(×2:配合 AMP×2,范围翻倍速度不变)
-    const gy = tilt.on ? 0.5 : 1;                 // 陀螺仪上下幅度再减半(竖直晃动更小)
     const m = regionMotion[r.id] ? 1 : 0;
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex[i]);
-    gl.uniform2f(uDisp, factor*strength*gain*smoothPar.x*m, factor*strength*gain*gy*smoothPar.y*m);
+    gl.uniform2f(uDisp, factor*strength*gain*smoothPar.x*m, factor*strength*gain*smoothPar.y*m);
     gl.uniform1f(uTint, selected===r.id ? 0.20 : 0.0);
     gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+    drawSparkleLayer(i, gain, maxPivotDist);    // 该层粒子:紧跟其 sprite,被更近的 sprite 遮挡
   });
   requestAnimationFrame(frame);
 }
@@ -714,6 +856,24 @@ function bindUI(){
     refreshRegionRow(selected); refreshSelPanel(); };
   $("selHide").onclick=()=>{ if(!selected)return; regionHidden[selected]=!regionHidden[selected];
     refreshRegionRow(selected); refreshSelPanel(); };
+  // Sparkles 控制
+  $("spkOn").onclick=e=>{ spk.on=!spk.on; e.target.textContent=spk.on?"on":"off"; e.target.classList.toggle("on",spk.on); if(spk.on) showSparkleGuide(); };
+  const spkStyleBtn={stars:$("spkStars"),dust:$("spkDust"),bokeh:$("spkBokeh"),snow:$("spkSnow"),leaves:$("spkLeaves")};
+  function setSpkStyle(s){ spk.style=s; for(const k in spkStyleBtn) spkStyleBtn[k].classList.toggle("on",k===s);
+    const st=SPK_STYLES[s];                    // 切样式:把该样式的默认方向锥/范围填进滑杆
+    spk.angle=st.angle;  $("spkAngle").value=st.angle;   $("spkAngleVal").textContent=st.angle+"°";
+    spk.spread=st.spread;$("spkSpread").value=st.spread; $("spkSpreadVal").textContent=st.spread+"°";
+    spk.radius=st.radius;$("spkRange").value=Math.round(st.radius*100); $("spkRangeVal").textContent=Math.round(st.radius*100)+"%";
+    buildSparkles(); showSparkleGuide(); }
+  for(const k in spkStyleBtn) spkStyleBtn[k].onclick=()=>setSpkStyle(k);
+  $("spkCount").oninput =e=>{ spk.count=+e.target.value; $("spkCountVal").textContent=spk.count; buildSparkles(); };
+  $("spkSpeed").oninput =e=>{ spk.speed=+e.target.value; $("spkSpeedVal").textContent=spk.speed.toFixed(1); };
+  $("spkAngle").oninput =e=>{ spk.angle=+e.target.value; $("spkAngleVal").textContent=spk.angle+"°"; showSparkleGuide(); };
+  $("spkSpread").oninput=e=>{ spk.spread=+e.target.value; $("spkSpreadVal").textContent=spk.spread+"°"; showSparkleGuide(); };
+  $("spkBright").oninput=e=>{ spk.bright=+e.target.value; $("spkBrightVal").textContent=spk.bright.toFixed(1); };
+  $("spkRange").oninput =e=>{ spk.radius=+e.target.value/100; $("spkRangeVal").textContent=e.target.value+"%"; showSparkleGuide(); };
+
+  $("exportBtn").onclick=()=>{ window.location = "/api/export/" + encodeURIComponent(CASE); };
   $("reset").onclick=resetAll;
 }
 function nudge(delta){ if(!selected)return; regionOffset[selected]=clamp(regionOffset[selected]+delta,-0.5,0.5);

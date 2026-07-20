@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>__TITLE__</title>
+<style>
+  html,body{ margin:0; height:100%; background:#0a1017; overflow:hidden;
+             font-family:system-ui,sans-serif; color:#e9eef5; }
+  #stage{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas{ max-width:100%; max-height:100%; touch-action:none; }
+  #tiltBtn{ position:fixed; left:50%; bottom:18px; transform:translateX(-50%);
+            background:rgba(77,163,255,.92); color:#052038; border:none; border-radius:22px;
+            padding:11px 20px; font-size:.95rem; font-weight:600; cursor:pointer; z-index:5; }
+  #tiltBtn.on{ background:rgba(20,30,42,.85); color:#e9eef5; }
+  #hint{ position:fixed; left:0; right:0; top:14px; text-align:center; font-size:.8rem;
+         color:#93a3b4; z-index:5; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="gl"></canvas></div>
+<div id="hint">移动鼠标 / 倾斜手机看立体视差</div>
+<button id="tiltBtn">开启手机陀螺仪</button>
+<script>
+// ====== 导出时注入的数据 ======
+const SCENE   = /*__SCENE__*/ {"width":1,"height":1,"layers":[]};   // {width,height,layers:[{id,depth_mean}] far→near}
+const SPRITES = /*__SPRITES__*/ [];                                 // data URI[],与 layers 同序(far→near)
+// ==============================
+
+const $ = id => document.getElementById(id);
+const clamp = (v,a,b)=>Math.min(b,Math.max(a,v));
+const W = SCENE.width, H = SCENE.height, layers = SCENE.layers;
+const depthRef = Math.max(...layers.map(l=>l.depth_mean));
+let pivotDepth = depthRef;                                  // 锚点=最近层
+
+let mouse={x:0,y:0,inside:false}, smoothPar={x:0,y:0}, tVel={x:0,y:0};
+let tilt={x:0,y:0,on:false,ref:null};
+let histX=[], histY=[]; const MEDN=20;
+function mean(a){ let s=0; for(const v of a) s+=v; return s/a.length; }
+
+// 陀螺仪:gamma=左右, beta=前后,随屏幕旋转重映射
+function screenAngle(){ return (screen.orientation&&screen.orientation.angle)||window.orientation||0; }
+const AMP_ROLL=28, AMP_PITCH=28, DRIFT=0.004;
+function onOrient(ev){
+  const gm=ev.gamma||0, bt=ev.beta||0;
+  if(tilt.ref===null) tilt.ref={g:gm,b:bt};
+  tilt.ref.g+=(gm-tilt.ref.g)*DRIFT; tilt.ref.b+=(bt-tilt.ref.b)*DRIFT;
+  const g=clamp((gm-tilt.ref.g)/AMP_ROLL,-1,1), b=clamp((bt-tilt.ref.b)/AMP_PITCH,-1,1);
+  const a=screenAngle();
+  if(a===90){ tilt.x=b; tilt.y=-g; }
+  else if(a===270||a===-90){ tilt.x=-b; tilt.y=g; }
+  else if(a===180){ tilt.x=-g; tilt.y=-b; }
+  else { tilt.x=g; tilt.y=b; }
+}
+
+/* WebGL:每层一张贴图,far→near 合成 */
+const VERT=`attribute vec2 p; varying vec2 uv;
+void main(){ uv=vec2(p.x*0.5+0.5,0.5-p.y*0.5); gl_Position=vec4(p,0.0,1.0); }`;
+const FRAG=`precision highp float; varying vec2 uv;
+uniform sampler2D uSprite; uniform vec2 uDisp;
+void main(){ vec4 c=texture2D(uSprite,uv-uDisp); if(c.a<0.004) discard; gl_FragColor=c; }`;
+let gl, prog, tex=[], quadBuf, pLoc;
+function sh(t,s){ const x=gl.createShader(t); gl.shaderSource(x,s); gl.compileShader(x); return x; }
+function mkTex(img){ const t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,t);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE); return t; }
+function initGL(imgs){
+  const cv=$("gl"); cv.width=W; cv.height=H;
+  gl=cv.getContext("webgl",{alpha:false,premultipliedAlpha:false});
+  prog=gl.createProgram(); gl.attachShader(prog,sh(gl.VERTEX_SHADER,VERT));
+  gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,FRAG)); gl.linkProgram(prog); gl.useProgram(prog);
+  quadBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,quadBuf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+  pLoc=gl.getAttribLocation(prog,"p"); gl.enableVertexAttribArray(pLoc);
+  gl.vertexAttribPointer(pLoc,2,gl.FLOAT,false,0,0);
+  tex=imgs.map(mkTex);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(0.04,0.06,0.09,1);
+}
+const strength=0.022;
+
+// ====== Sparkles(导出时注入当前设置)======
+const spk = /*__SPK__*/ {"on":false,"style":"stars","count":400,"speed":1,"angle":90,"spread":30,"bright":0,"radius":1,"ox":0.5,"oy":0.5};
+const SPK_STYLES = {
+  stars:  { sizeMin:3, sizeMax:9,  tw:7.0, color:[1,1,1],        leaf:0, life:6, travel:0.05, sway:0,    tumble:0   },
+  dust:   { sizeMin:2, sizeMax:6,  tw:2.0, color:[1,0.9,0.7],    leaf:0, life:8, travel:0.25, sway:0,    tumble:0   },
+  bokeh:  { sizeMin:12,sizeMax:26, tw:1.3, color:[1,0.85,0.5],   leaf:0, life:9, travel:0.45, sway:0,    tumble:0   },
+  snow:   { sizeMin:4, sizeMax:10, tw:0.8, color:[0.9,0.95,1.0], leaf:0, life:7, travel:1.0,  sway:0.01, tumble:0   },
+  leaves: { sizeMin:10,sizeMax:20, tw:0.5, color:[0.66,0.5,0.22],leaf:1, life:8, travel:1.0,  sway:0.03, tumble:2.5 },
+};
+const SPK_VERT = `attribute vec4 aSeed; attribute vec3 aData;
+uniform float uTime,uSpeed,uLife,uTravel,uRadius,uAngle,uSpread,uBright,uSway,uTumble,uTw,uPivot,uMaxD,uGamma,uSizeScale,uDMin,uDSpan;
+uniform vec2 uPar,uOrigin; varying float vA; varying float vRot;
+void main(){
+  float t01=fract(uTime*uSpeed/uLife + aSeed.w);
+  vec2 spawn=uOrigin + aSeed.xy*uRadius;
+  float ang=radians(uAngle)+aSeed.z*radians(uSpread);
+  vec2 p=spawn + vec2(cos(ang),sin(ang))*(t01*uTravel);
+  p.x += sin(uTime*1.6 + aSeed.w*6.28)*uSway; p=fract(p);
+  float d=aData.x, dist=uPivot-d; float f=sign(dist)*pow(abs(dist)/uMaxD,uGamma)*uMaxD; p+=f*uPar;
+  gl_Position=vec4(p.x*2.0-1.0, 1.0-p.y*2.0, 0.0,1.0);
+  float near01=clamp((d-uDMin)/max(uDSpan,1e-3),0.0,1.0); gl_PointSize=aData.y*uSizeScale*mix(0.5,1.5,near01);
+  float fade=smoothstep(0.0,0.12,t01)*smoothstep(1.0,0.85,t01);
+  float tw=0.55+0.45*sin(uTime*uTw + aSeed.w*6.28);
+  float nd=clamp(abs(uPivot-d)/max(uMaxD,1e-3),0.0,1.0);
+  vA=clamp(fade*tw*max(1.0+uBright*(0.5-nd),0.0),0.0,2.0); vRot=aData.z+uTime*uTumble;
+}`;
+const SPK_FRAG = `precision highp float; varying float vA; varying float vRot; uniform vec3 uColor; uniform float uLeaf;
+void main(){ vec2 c=gl_PointCoord-0.5; float a;
+  if(uLeaf>0.5){ float s=sin(vRot),co=cos(vRot); vec2 r=vec2(c.x*co-c.y*s,c.x*s+c.y*co);
+    a=1.0-smoothstep(0.16,0.42,length(vec2(r.x*2.4,r.y))); gl_FragColor=vec4(uColor,a*vA); }
+  else { a=smoothstep(0.5,0.0,length(c)); a*=a; gl_FragColor=vec4(uColor*vA,a*vA); } }`;
+let sprog, sbuf, sCount=0, sLoc={}, sU={}, spkRanges=null;
+function initSparkles(){
+  const p=gl.createProgram(); gl.attachShader(p,sh(gl.VERTEX_SHADER,SPK_VERT)); gl.attachShader(p,sh(gl.FRAGMENT_SHADER,SPK_FRAG));
+  gl.linkProgram(p); sprog=p; sbuf=gl.createBuffer();
+  sLoc={ aSeed:gl.getAttribLocation(p,"aSeed"), aData:gl.getAttribLocation(p,"aData") };
+  ["uTime","uSpeed","uLife","uTravel","uRadius","uAngle","uSpread","uBright","uSway","uTumble","uTw",
+   "uPivot","uMaxD","uGamma","uSizeScale","uDMin","uDSpan","uPar","uOrigin","uColor","uLeaf"].forEach(k=>sU[k]=gl.getUniformLocation(p,k));
+  buildSparkles();
+}
+function buildSparkles(){
+  const st=SPK_STYLES[spk.style], N=spk.count, nL=Math.max(1,layers.length);
+  const li=new Int32Array(N); for(let k=0;k<N;k++) li[k]=(Math.random()*nL)|0;
+  spkRanges=layers.map(()=>({start:0,count:0})); if(!layers.length) spkRanges=[{start:0,count:N}];
+  for(let k=0;k<N;k++) spkRanges[li[k]].count++;
+  let acc=0; for(const r of spkRanges){ r.start=acc; acc+=r.count; }
+  const cur=spkRanges.map(r=>r.start), a=new Float32Array(N*7);
+  for(let k=0;k<N;k++){ const L=li[k], o=cur[L]++*7, rr=Math.sqrt(Math.random()), th=Math.random()*6.283;
+    a[o]=rr*Math.cos(th); a[o+1]=rr*Math.sin(th); a[o+2]=Math.random()-0.5; a[o+3]=Math.random();
+    a[o+4]= layers.length?layers[L].depth_mean:0.5; a[o+5]=st.sizeMin+Math.random()*(st.sizeMax-st.sizeMin); a[o+6]=Math.random()*6.283; }
+  gl.bindBuffer(gl.ARRAY_BUFFER,sbuf); gl.bufferData(gl.ARRAY_BUFFER,a,gl.STATIC_DRAW); sCount=N;
+}
+function drawSparkleLayer(li,gain,maxD){
+  if(!spk.on || !spkRanges || !spkRanges[li] || !spkRanges[li].count) return;
+  const st=SPK_STYLES[spk.style]; gl.useProgram(sprog);
+  gl.blendFunc(gl.SRC_ALPHA, st.leaf?gl.ONE_MINUS_SRC_ALPHA:gl.ONE);
+  gl.bindBuffer(gl.ARRAY_BUFFER,sbuf);
+  gl.enableVertexAttribArray(sLoc.aSeed); gl.vertexAttribPointer(sLoc.aSeed,4,gl.FLOAT,false,28,0);
+  gl.enableVertexAttribArray(sLoc.aData); gl.vertexAttribPointer(sLoc.aData,3,gl.FLOAT,false,28,16);
+  gl.uniform1f(sU.uTime,performance.now()/1000); gl.uniform1f(sU.uSpeed,spk.speed); gl.uniform1f(sU.uLife,st.life);
+  gl.uniform1f(sU.uTravel,st.travel); gl.uniform1f(sU.uRadius,spk.radius); gl.uniform2f(sU.uOrigin,spk.ox,spk.oy);
+  gl.uniform1f(sU.uAngle,spk.angle); gl.uniform1f(sU.uSpread,spk.spread); gl.uniform1f(sU.uBright,spk.bright);
+  gl.uniform1f(sU.uSway,st.sway); gl.uniform1f(sU.uTumble,st.tumble); gl.uniform1f(sU.uTw,st.tw);
+  gl.uniform2f(sU.uPar,strength*gain*smoothPar.x,strength*gain*smoothPar.y);
+  gl.uniform1f(sU.uPivot,pivotDepth); gl.uniform1f(sU.uMaxD,maxD); gl.uniform1f(sU.uGamma,2.0);
+  gl.uniform1f(sU.uSizeScale,$("gl").width/1024);
+  let dmin=1e9,dmax=-1e9; for(const l of layers){ if(l.depth_mean<dmin)dmin=l.depth_mean; if(l.depth_mean>dmax)dmax=l.depth_mean; }
+  gl.uniform1f(sU.uDMin,dmin); gl.uniform1f(sU.uDSpan,dmax-dmin);
+  gl.uniform3f(sU.uColor,st.color[0],st.color[1],st.color[2]); gl.uniform1f(sU.uLeaf,st.leaf?1:0);
+  gl.drawArrays(gl.POINTS, spkRanges[li].start, spkRanges[li].count);
+}
+function frame(){
+  let px=0,py=0;
+  if(tilt.on){
+    histX.push(tilt.x); histY.push(tilt.y);
+    if(histX.length>MEDN){ histX.shift(); histY.shift(); }
+    const tx=mean(histX), ty=mean(histY);
+    const VMAX=0.004, APPROACH=0.01, ACCEL=0.000075, DECEL=0.0000375;
+    const follow=(tgt,pos,vel)=>{ const dv=clamp((tgt-pos)*APPROACH,-VMAX,VMAX);
+      const lim=Math.abs(dv)>=Math.abs(vel)?ACCEL:DECEL; return vel+clamp(dv-vel,-lim,lim); };
+    tVel.x=follow(tx,smoothPar.x,tVel.x); smoothPar.x+=tVel.x;
+    tVel.y=follow(ty,smoothPar.y,tVel.y); smoothPar.y+=tVel.y;
+  } else {
+    px=mouse.inside?mouse.x:0; py=mouse.inside?mouse.y:0;
+    smoothPar.x+=(px-smoothPar.x)*0.08; smoothPar.y+=(py-smoothPar.y)*0.08;
+    histX.length=0; histY.length=0; tVel.x=tVel.y=0;
+  }
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  let maxD=0; for(const l of layers) maxD=Math.max(maxD,Math.abs(pivotDepth-l.depth_mean)); maxD=maxD||1;
+  const GAMMA=2, gain=tilt.on?4:1;
+  const uSprite=gl.getUniformLocation(prog,"uSprite"), uDisp=gl.getUniformLocation(prog,"uDisp");
+  gl.uniform1i(uSprite,0);
+  layers.forEach((l,i)=>{
+    const dist=pivotDepth-l.depth_mean;
+    const f=Math.sign(dist)*Math.pow(Math.abs(dist)/maxD,GAMMA)*maxD;
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,tex[i]);
+    gl.uniform2f(uDisp, f*strength*gain*smoothPar.x, f*strength*gain*smoothPar.y);
+    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  });
+  requestAnimationFrame(frame);
+}
+
+function loadImg(src){ return new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=src; }); }
+addEventListener("pointermove",e=>{ const cv=$("gl"), r=cv.getBoundingClientRect();
+  mouse.x=((e.clientX-r.left)/r.width-0.5)*2; mouse.y=((e.clientY-r.top)/r.height-0.5)*2; mouse.inside=true; });
+addEventListener("pointerleave",()=>mouse.inside=false);
+addEventListener("orientationchange",()=>{ tilt.ref=null; });
+$("tiltBtn").onclick=async()=>{
+  if(tilt.on){ tilt.on=false; removeEventListener("deviceorientation",onOrient);
+    $("tiltBtn").textContent="开启手机陀螺仪"; $("tiltBtn").classList.remove("on"); return; }
+  try{ if(typeof DeviceOrientationEvent!=="undefined"&&DeviceOrientationEvent.requestPermission){
+    if(await DeviceOrientationEvent.requestPermission()!=="granted"){ alert("需要允许「动作与方向」权限"); return; } }
+  }catch(err){ alert("陀螺仪不可用"); return; }
+  tilt.ref=null; tilt.on=true; addEventListener("deviceorientation",onOrient);
+  $("tiltBtn").textContent="关闭陀螺仪"; $("tiltBtn").classList.add("on");
+};
+
+(async()=>{
+  const imgs=await Promise.all(SPRITES.map(loadImg));
+  initGL(imgs); requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
