@@ -30,25 +30,25 @@ def process_image(input_path, case_dir, points_per_side: int = 32, progress=None
     case_dir = Path(case_dir)
     case_dir.mkdir(parents=True, exist_ok=True)
 
-    tick(1, "裁边")
+    tick(1, "Cropping the frame")
     img = remove_white_frame(Image.open(input_path).convert("RGB"))
     img.save(case_dir / "cropped_input.png")
 
-    tick(2, "估计深度")
+    tick(2, "Estimating depth")
     depth = build_depth_map(img)
     save_depth_image(depth, case_dir / "depth_map.png")
 
-    tick(3, "SAM 分割 + valley 分层")
+    tick(3, "SAM segmentation + valley slicing")
     masks, _ = run_sam2_masks(img, points_per_side=points_per_side)
     label_map, regions = build_sam_valley_regions(np.asarray(depth, np.float32) if not isinstance(depth, np.ndarray) else depth, masks)
     save_scene(label_map, regions, case_dir)   # 写 scene.json + region_labels.png
     save_segments(masks, case_dir / "segments.png")   # SAM 分割图,供网页「SAM 选物体」
 
-    tick(4, "背景补全")
+    tick(4, "Inpainting the backplate")
     build_background(case_dir / "cropped_input.png", case_dir / "scene.json",
                      case_dir / "region_labels.png", case_dir / "background.png")
 
-    tick(5, "生成分层贴图")
+    tick(5, "Baking layer sprites")
     build_sprites(case_dir / "cropped_input.png", case_dir / "scene.json",
                   case_dir / "region_labels.png", case_dir / "sprites")
     return case_dir

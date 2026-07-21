@@ -39,7 +39,7 @@ Once a photo is processed you land in the editor, where the layering is yours to
 
 ![Editor](docs/editor.png)
 
-- **Motion** — mouse, auto-sway, or phone gyroscope (needs HTTPS on a real device). Pick the *parallax anchor*: which depth stays pinned while everything else moves around it.
+- **Motion** — mouse, auto-sway, or phone gyroscope (needs HTTPS on a real device). Pick the *anchor*: which depth stays pinned while everything else moves around it.
 - **Layer list** — select a layer to highlight it, nudge it forward/back in depth, freeze it, or hide it.
 - **Cutout tools** — brush, eraser, colour wand, and *SAM object pick* (one click assigns a whole detected object to the current layer). Re-bake to regenerate the backplate and sprites from your edits.
 - **Depth curve** — drag the boundaries between layers directly on the depth histogram.
@@ -66,8 +66,11 @@ python build_scene.py                       # re-slice using the cached depth ma
 python build_background.py --method harmonic
 python build_sprites.py
 
-# Render a parallax preview GIF
+# Render a parallax preview GIF (any stage flag accepts a case dir)
 python build_preview.py --layered
+python build_preview.py --layered --scene outputs/cases/park/scene.json \
+    --image outputs/cases/park/cropped_input.png \
+    --labels outputs/cases/park/region_labels.png --out park.gif
 ```
 
 ### Inpainting methods
@@ -108,5 +111,3 @@ A case folder holds `cropped_input.png`, `depth_map.png`, `region_labels.png`, `
 ## Requirements
 
 Python 3.10+, plus `torch`, `transformers`, `opencv-python`, `numpy`, `Pillow`, `fastapi`, `uvicorn`. Optional: `simple-lama-inpainting` for the `lama` backfill. A GPU (CUDA or Apple MPS) is used automatically when present but is not required.
-
-> Note: the editor and upload UI are currently labelled in Chinese.

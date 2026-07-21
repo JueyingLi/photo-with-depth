@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
@@ -19,8 +19,8 @@
 </head>
 <body>
 <div id="stage"><canvas id="gl"></canvas></div>
-<div id="hint">移动鼠标 / 倾斜手机看立体视差</div>
-<button id="tiltBtn">开启手机陀螺仪</button>
+<div id="hint">Move your mouse — or tilt your phone — to see the depth</div>
+<button id="tiltBtn">Enable phone gyroscope</button>
 <script>
 // ====== 导出时注入的数据 ======
 const SCENE   = /*__SCENE__*/ {"width":1,"height":1,"layers":[]};   // {width,height,layers:[{id,depth_mean}] far→near}
@@ -190,12 +190,12 @@ addEventListener("pointerleave",()=>mouse.inside=false);
 addEventListener("orientationchange",()=>{ tilt.ref=null; });
 $("tiltBtn").onclick=async()=>{
   if(tilt.on){ tilt.on=false; removeEventListener("deviceorientation",onOrient);
-    $("tiltBtn").textContent="开启手机陀螺仪"; $("tiltBtn").classList.remove("on"); return; }
+    $("tiltBtn").textContent="Enable phone gyroscope"; $("tiltBtn").classList.remove("on"); return; }
   try{ if(typeof DeviceOrientationEvent!=="undefined"&&DeviceOrientationEvent.requestPermission){
-    if(await DeviceOrientationEvent.requestPermission()!=="granted"){ alert("需要允许「动作与方向」权限"); return; } }
-  }catch(err){ alert("陀螺仪不可用"); return; }
+    if(await DeviceOrientationEvent.requestPermission()!=="granted"){ alert("Motion & Orientation access is required"); return; } }
+  }catch(err){ alert("Gyroscope unavailable"); return; }
   tilt.ref=null; tilt.on=true; addEventListener("deviceorientation",onOrient);
-  $("tiltBtn").textContent="关闭陀螺仪"; $("tiltBtn").classList.add("on");
+  $("tiltBtn").textContent="Disable gyroscope"; $("tiltBtn").classList.add("on");
 };
 
 (async()=>{

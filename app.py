@@ -46,7 +46,7 @@ async def api_process(file: UploadFile = File(...)):
     upath = case_dir / ("upload" + (Path(file.filename).suffix or ".png"))
     with open(upath, "wb") as f:
         shutil.copyfileobj(file.file, f)
-    jobs[cid] = {"status": "running", "step": 0, "total": 5, "msg": "排队中", "case": cid}
+    jobs[cid] = {"status": "running", "step": 0, "total": 5, "msg": "Queued", "case": cid}
     threading.Thread(target=_run_job, args=(cid, str(upath), str(case_dir)), daemon=True).start()
     return {"job": cid}
 

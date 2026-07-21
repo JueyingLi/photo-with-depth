@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -36,22 +36,22 @@
 <body>
 <div class="card">
   <h1>Depth Photo Studio</h1>
-  <p class="sub">上传一张照片,自动分层成会动的立体照片。处理在本机进行。</p>
+  <p class="sub">Upload a photo and it gets sliced into moving depth layers. Everything runs on this machine.</p>
 
   <label class="drop" id="drop">
-    点击或拖入照片 · <b>选择图片</b>
+    Click or drop a photo · <b>choose an image</b>
     <input type="file" id="file" accept="image/*">
   </label>
   <img class="thumb" id="thumb">
-  <button id="go" disabled>开始分层</button>
+  <button id="go" disabled>Build the layers</button>
 
   <div class="prog" id="prog">
     <div class="bar"><i id="barFill"></i></div>
-    <div class="msg" id="progMsg">处理中…</div>
+    <div class="msg" id="progMsg">Working…</div>
   </div>
 
   <div class="cases">
-    <h2>已有案例</h2>
+    <h2>Existing cases</h2>
     <div id="caseList"></div>
   </div>
 </div>
@@ -86,7 +86,7 @@ async function poll(job){
   $("barFill").style.width = pct + "%";
   $("progMsg").textContent = `${s.msg||""} (${s.step||0}/${s.total||5})`;
   if(s.status === "done"){ location.href = "/editor?case=" + s.case; return; }
-  if(s.status === "error"){ $("progMsg").textContent = "出错: " + s.msg; $("go").disabled=false; return; }
+  if(s.status === "error"){ $("progMsg").textContent = "Error: " + s.msg; $("go").disabled=false; return; }
   setTimeout(()=>poll(job), 800);
 }
 
@@ -94,7 +94,7 @@ async function poll(job){
 fetch("/api/cases").then(r=>r.json()).then(list=>{
   $("caseList").innerHTML = list.length
     ? list.map(c=>`<a class="caseLink" href="/editor?case=${c}">${c}</a>`).join("")
-    : '<span style="color:var(--mut);font-size:.82rem">还没有,先上传一张</span>';
+    : '<span style="color:var(--mut);font-size:.82rem">None yet — upload one to start</span>';
 }).catch(()=>{});
 </script>
 </body>

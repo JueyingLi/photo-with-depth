@@ -39,6 +39,8 @@ def parse_args():
                    help="layered mode: regions with depth_mean >= this are moving foreground cutouts")
     p.add_argument("--scene", default=str(OUTPUT_DIR / "scene.json"))
     p.add_argument("--labels", default=str(OUTPUT_DIR / "region_labels.png"))
+    p.add_argument("--background", default=None,
+                   help="layered mode: background plate (default: background.png beside --scene)")
     return p.parse_args()
 
 
@@ -87,18 +89,20 @@ def main():
     args = parse_args()
     import json
     img = np.asarray(Image.open(args.image).convert("RGB"))
-    depth = np.asarray(Image.open(args.depth).convert("L")).astype(np.float32) / 255.0
-    H, W = depth.shape
 
     if args.layered:
         # Ghost-free: cutouts move with their alpha over the prebuilt plate.
+        # Depth isn't read here — the sprites already carry their layer order.
         scene = json.load(open(args.scene))
         lab = np.asarray(Image.open(args.labels).convert("L"))
-        plate = str(OUTPUT_DIR / "background.png")
+        # Plate lives beside the scene it belongs to, so --scene from a case dir stays consistent.
+        plate = args.background or str(Path(args.scene).parent / "background.png")
         print(f"layered mode: {sum(1 for r in scene['regions'] if r.get('mover'))}"
               f" mover cutouts over {Path(plate).name}")
         rgb_frames = layered_frames(img, scene, lab, args.amp, args.frames, plate)
     else:
+        depth = np.asarray(Image.open(args.depth).convert("L")).astype(np.float32) / 255.0
+        H, W = depth.shape
         if args.snap:
             depth = snapped_depth(args.scene, args.labels, (H, W))
             print("snapped mode: each region moves as one flat plane at its layer depth")

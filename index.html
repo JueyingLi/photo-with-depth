@@ -82,36 +82,36 @@
     <div class="stage" id="stage">
       <div class="canvaswrap" id="wrap"><canvas id="gl"></canvas><canvas id="edit"></canvas></div>
       <div class="zoombar">
-        <button id="zoomOut" title="缩小">−</button>
+        <button id="zoomOut" title="Zoom out">−</button>
         <span class="zlvl" id="zlvl">100%</span>
-        <button id="zoomIn" title="放大">＋</button>
-        <button id="zoomFit" title="复位">⤢</button>
+        <button id="zoomIn" title="Zoom in">＋</button>
+        <button id="zoomFit" title="Fit to view">⤢</button>
       </div>
     </div>
-    <div class="hint" style="margin-top:10px">滚轮/⤢ 缩放,拖动平移(抠图时按住空格或中键拖)。移动光标或开 <b>Phone tilt</b> 看视差。<b>Cutout</b> 下先选层,再刷/擦,然后 <b>重新生成</b>。</div>
+    <div class="hint" style="margin-top:10px">Scroll / ⤢ to zoom, drag to pan (hold space or middle-drag while cutting out). Move the cursor or turn on <b>Phone tilt</b> to see the parallax. Under <b>Cutout</b>, pick a layer, brush or erase, then <b>re-bake</b>.</div>
   </div>
 
-  <div class="gutter" id="gutter" title="拖动改变宽度"></div>
+  <div class="gutter" id="gutter" title="Drag to resize"></div>
 
   <div class="side" id="side">
-    <div class="row" style="margin-top:0"><h2 style="margin:0">Controls</h2><button id="minBtn">▾ 收起</button></div>
+    <div class="row" style="margin-top:0"><h2 style="margin:0">Controls</h2><button id="minBtn">▾ collapse</button></div>
     <div class="row"><span>Parallax strength</span><input id="strength" type="range" min="0" max="0.06" step="0.001" value="0.022"></div>
     <div class="row"><span>Auto-sway</span><button id="sway">off</button></div>
-    <div class="row"><span>Phone tilt <span class="hint">(陀螺仪)</span></span><button id="tilt">off</button></div>
-    <div class="row"><span>视差锚点 <span class="hint">(不动的层·鼠标&陀螺仪)</span></span>
-      <div class="btns"><button id="pvFar">远</button><button id="pvMid">中</button><button id="pvNear" class="on">近</button><button id="pvSel">选中层</button></div></div>
+    <div class="row"><span>Phone tilt <span class="hint">(gyroscope)</span></span><button id="tilt">off</button></div>
+    <div class="row"><span>Anchor <span class="hint">(layer that stays still)</span></span>
+      <div class="btns"><button id="pvFar">far</button><button id="pvMid">mid</button><button id="pvNear" class="on">near</button><button id="pvSel">selected</button></div></div>
 
     <h2>Layers <span class="hint" id="rcount"></span></h2>
     <div class="regions" id="regionList"></div>
-    <button id="curveToggle" style="width:100%; margin-top:8px">调整深度分层 ▾</button>
+    <button id="curveToggle" style="width:100%; margin-top:8px">Adjust depth slicing ▾</button>
     <div id="curvePanel" class="hidden" style="margin-top:8px">
       <canvas id="curve" width="300" height="120" style="width:100%; height:120px; display:block; background:#0f1722; border:1px solid var(--line); border-radius:8px; touch-action:none; cursor:crosshair"></canvas>
-      <div class="hint" id="curveInfo" style="margin-top:6px">拖竖线=移动分界 · 双击空白=加一层 · 双击竖线=合并</div>
-      <button id="curveApply" class="primary" style="width:100%; margin-top:6px">✓ 应用深度分层 · 重新生成</button>
+      <div class="hint" id="curveInfo" style="margin-top:6px">drag a line = move the boundary · double-click empty space = add a layer · double-click a line = merge</div>
+      <button id="curveApply" class="primary" style="width:100%; margin-top:6px">✓ Apply slicing · re-bake</button>
     </div>
 
     <div class="selpanel hidden" id="selPanel">
-      <div class="row" style="margin-top:0"><b id="selName">–</b><span><span class="tag" id="selMode"></span> <button id="selClear">取消选择 ✕</button></span></div>
+      <div class="row" style="margin-top:0"><b id="selName">–</b><span><span class="tag" id="selMode"></span> <button id="selClear">deselect ✕</button></span></div>
       <div class="readout" id="selStats"></div>
       <div class="row"><span>Depth offset (re-rank)</span><input id="selOffset" type="range" min="-0.5" max="0.5" step="0.01" value="0"></div>
       <div class="row"><span class="readout" id="selOffsetVal">0.00</span>
@@ -121,33 +121,33 @@
       <div class="row"><span>Hide layer</span><button id="selHide">off</button></div>
     </div>
 
-    <h2>Cutout <span class="hint">抠图</span></h2>
-    <div class="hint">先在上面选一层(高亮蓝)。<b>画笔</b>刷进这层,<b>橡皮</b>把这层擦掉处退到后一层,<b>颜色魔棒</b>点相近色块整片归入,<b>SAM 选物体</b>点一下把整个物体归入——再用画笔/橡皮精修。</div>
+    <h2>Cutout</h2>
+    <div class="hint">Pick a layer above first (highlighted blue). <b>Brush</b> paints into that layer, <b>eraser</b> drops what you rub out back to the layer behind, <b>colour wand</b> pulls a whole patch of similar colour in, <b>SAM object</b> assigns an entire detected object in one click — then tidy up with the brush and eraser.</div>
     <div class="btns" style="margin-top:8px">
-      <button id="brushBtn">brush 画笔</button>
-      <button id="eraseBtn">eraser 橡皮</button>
-      <button id="wandBtn">颜色魔棒</button>
-      <button id="samBtn">SAM 选物体</button>
+      <button id="brushBtn">brush</button>
+      <button id="eraseBtn">eraser</button>
+      <button id="wandBtn">colour wand</button>
+      <button id="samBtn">SAM object</button>
     </div>
     <div class="row"><span>Brush size <span class="readout" id="brSizeVal">40</span></span><input id="brSize" type="range" min="1" max="300" step="1" value="40"></div>
-    <div class="row"><span>魔棒容差 <span class="readout" id="wandTolVal">30</span></span><input id="wandTol" type="range" min="5" max="120" step="1" value="30"></div>
-    <button id="rebakeBtn" class="primary" style="width:100%; margin-top:8px">✓ 应用抠图 · 重新生成分层</button>
-    <div class="btns" style="margin-top:6px"><button id="undoBtn">撤销涂抹</button></div>
+    <div class="row"><span>Wand tolerance <span class="readout" id="wandTolVal">30</span></span><input id="wandTol" type="range" min="5" max="120" step="1" value="30"></div>
+    <button id="rebakeBtn" class="primary" style="width:100%; margin-top:8px">✓ Apply cutout · re-bake layers</button>
+    <div class="btns" style="margin-top:6px"><button id="undoBtn">undo strokes</button></div>
 
-    <h2>Sparkles <span class="hint">动态光点(嵌进各层深度·会被遮挡)</span></h2>
-    <div class="row" style="margin-top:0"><span>开启</span><button id="spkOn">off</button></div>
-    <div class="row"><span>样式</span>
-      <div class="btns"><button id="spkStars" class="on">闪烁星</button><button id="spkDust">浮尘</button><button id="spkBokeh">光斑</button><button id="spkSnow">雪</button><button id="spkLeaves">碎叶</button></div></div>
-    <div class="row"><span>数量 <span class="readout" id="spkCountVal">400</span></span><input id="spkCount" type="range" min="50" max="2000" step="50" value="400"></div>
-    <div class="row"><span>速度 <span class="readout" id="spkSpeedVal">1.0</span></span><input id="spkSpeed" type="range" min="0" max="4" step="0.1" value="1"></div>
-    <div class="row"><span>方向角 <span class="readout" id="spkAngleVal">90°</span></span><input id="spkAngle" type="range" min="0" max="360" step="5" value="90"></div>
-    <div class="row"><span>扩散锥 <span class="readout" id="spkSpreadVal">30°</span></span><input id="spkSpread" type="range" min="0" max="360" step="5" value="30"></div>
-    <div class="row"><span>亮度 前↔后 <span class="readout" id="spkBrightVal">0.0</span></span><input id="spkBright" type="range" min="-1" max="1" step="0.1" value="0"></div>
-    <div class="row"><span>范围 <span class="readout" id="spkRangeVal">100%</span></span><input id="spkRange" type="range" min="5" max="100" step="5" value="100"></div>
-    <div class="hint">方向角 0°→ · 90°↓ · 180°← · 270°↑;范围=以画面中心为初始点的半径,越小越像从一点喷出</div>
+    <h2>Sparkles <span class="hint">particles sitting at each layer's depth · occluded by nearer layers</span></h2>
+    <div class="row" style="margin-top:0"><span>Enable</span><button id="spkOn">off</button></div>
+    <div class="row"><span>Style</span>
+      <div class="btns"><button id="spkStars" class="on">stars</button><button id="spkDust">dust</button><button id="spkBokeh">bokeh</button><button id="spkSnow">snow</button><button id="spkLeaves">leaves</button></div></div>
+    <div class="row"><span>Count <span class="readout" id="spkCountVal">400</span></span><input id="spkCount" type="range" min="50" max="2000" step="50" value="400"></div>
+    <div class="row"><span>Speed <span class="readout" id="spkSpeedVal">1.0</span></span><input id="spkSpeed" type="range" min="0" max="4" step="0.1" value="1"></div>
+    <div class="row"><span>Direction <span class="readout" id="spkAngleVal">90°</span></span><input id="spkAngle" type="range" min="0" max="360" step="5" value="90"></div>
+    <div class="row"><span>Spread cone <span class="readout" id="spkSpreadVal">30°</span></span><input id="spkSpread" type="range" min="0" max="360" step="5" value="30"></div>
+    <div class="row"><span>Brightness front↔back <span class="readout" id="spkBrightVal">0.0</span></span><input id="spkBright" type="range" min="-1" max="1" step="0.1" value="0"></div>
+    <div class="row"><span>Radius <span class="readout" id="spkRangeVal">100%</span></span><input id="spkRange" type="range" min="5" max="100" step="5" value="100"></div>
+    <div class="hint">Direction 0°→ · 90°↓ · 180°← · 270°↑. Radius = spawn disc around the centre of the image; the smaller it is, the more the particles look like they erupt from one point.</div>
 
     <div class="divider"></div>
-    <div class="btns"><button id="exportBtn" class="primary" style="width:100%">导出可分享 HTML</button></div>
+    <div class="btns"><button id="exportBtn" class="primary" style="width:100%">Export shareable HTML</button></div>
     <div class="btns" style="margin-top:6px"><button id="reset">reset all edits</button></div>
     <p class="hint" id="status" style="margin-top:12px">loading…</p>
   </div>
@@ -635,13 +635,13 @@ function labelToBlob(){                                  // editLabel → 灰度
   return new Promise(res=>c.toBlob(res,"image/png"));
 }
 async function rebake(){
-  $("status").textContent="重新生成层中…(约 10 秒)";
+  $("status").textContent="Re-baking layers… (about 10s)";
   const blob=await labelToBlob();
   const fd=new FormData(); fd.append("case",CASE); fd.append("file",blob,"labels.png");
   try{
     const res=await (await fetch("/api/rebake",{method:"POST",body:fd})).json();
-    if(res.ok){ location.reload(); } else { $("status").textContent="出错: "+(res.error||"?"); }
-  }catch(err){ $("status").textContent="需要用 app.py 后端才能重新生成"; }
+    if(res.ok){ location.reload(); } else { $("status").textContent="Error: "+(res.error||"?"); }
+  }catch(err){ $("status").textContent="Re-baking needs the app.py backend running"; }
 }
 
 /* ---------- 面板收起 / 案例切换 ---------- */
@@ -694,12 +694,12 @@ function drawCurve(){
     g.beginPath(); g.moveTo(x,12); g.lineTo(x,Hc); g.stroke();
     g.fillStyle="#4da3ff"; g.beginPath(); g.arc(x,8,5,0,7); g.fill(); });
   g.fillStyle="rgba(147,163,180,0.9)"; g.font="10px sans-serif";
-  g.fillText("远",x0+2,Hc-3); g.textAlign="right"; g.fillText("近",x1-2,Hc-3); g.textAlign="left";
-  $("curveInfo").textContent=`${bandList.length} 层 · 拖竖线=移动 · 双击空白=加一层 · 双击竖线=合并`;
+  g.fillText("far",x0+2,Hc-3); g.textAlign="right"; g.fillText("near",x1-2,Hc-3); g.textAlign="left";
+  $("curveInfo").textContent=`${bandList.length} layers · drag = move a boundary · double-click empty = add · double-click a line = merge`;
 }
 function openCurve(open){
   $("curvePanel").classList.toggle("hidden",!open);
-  $("curveToggle").textContent = open ? "深度分层 ▴" : "调整深度分层 ▾";
+  $("curveToggle").textContent = open ? "Depth slicing ▴" : "Adjust depth slicing ▾";
   if(open){ if(!hist) buildHistogram(); if(!override) seedBands();
     curveActive=true; recomputeLabel(); drawCurve(); }
   else { curveActive=false; redrawEditFull(); }
@@ -772,7 +772,7 @@ function bindUI(){
   $("brushBtn").onclick=()=>setCutoutMode("brush");
   $("eraseBtn").onclick=()=>setCutoutMode("eraser");
   $("wandBtn").onclick=()=>setCutoutMode("wand");
-  $("samBtn").onclick=()=>{ if(!segData){ $("status").textContent="这个案例没有 SAM 分割图(segments.png)"; return; } setCutoutMode("sam"); };
+  $("samBtn").onclick=()=>{ if(!segData){ $("status").textContent="This case has no SAM segmentation map (segments.png)"; return; } setCutoutMode("sam"); };
   $("brSize").oninput=e=>{ brushSize=+e.target.value; $("brSizeVal").textContent=brushSize; };
   $("wandTol").oninput=e=>{ wandTol=+e.target.value; $("wandTolVal").textContent=wandTol; };
   $("rebakeBtn").onclick=rebake;
@@ -801,7 +801,7 @@ function bindUI(){
   fetch("/api/cases").then(r=>r.json()).then(list=>{
     if(Array.isArray(list) && list.length){
       $("caseSel").innerHTML = list.map(c=>`<option value="${c}">${c}</option>`).join("")
-        + '<option value="__new">+ 上传新照片</option>';
+        + '<option value="__new">+ upload a new photo</option>';
     }
     $("caseSel").value = CASE;
   }).catch(()=>{ $("caseSel").value = CASE; });
@@ -824,9 +824,9 @@ function bindUI(){
       e.target.textContent="off"; e.target.classList.remove("on"); return; }
     try{                                            // iOS 13+ 需要用户手势里申请权限
       if(typeof DeviceOrientationEvent!=="undefined" && DeviceOrientationEvent.requestPermission){
-        if(await DeviceOrientationEvent.requestPermission()!=="granted"){ alert("需要允许「动作与方向」权限"); return; }
+        if(await DeviceOrientationEvent.requestPermission()!=="granted"){ alert("Motion & Orientation access is required"); return; }
       }
-    }catch(err){ alert("陀螺仪不可用: "+err); return; }
+    }catch(err){ alert("Gyroscope unavailable: "+err); return; }
     tilt.ref=null; tilt.on=true; window.addEventListener("deviceorientation",onOrient);
     e.target.textContent="on"; e.target.classList.add("on");
   };
